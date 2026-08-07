@@ -1,0 +1,19 @@
+<section class="panel">
+  <h2>字段映射</h2>
+  <p class="muted">上传会话 session_id：{{ session_id }}</p>
+  <form action="/jobs" method="post">
+    <input type="hidden" name="session_id" value="{{ session_id }}">
+    <div class="form-row"><label>任务名称<input name="job_name" value="跨表重复投诉分析"></label>
+      <label>匹配档位<select name="match_preset"><option value="strict">严格</option><option value="balanced" selected>平衡</option><option value="loose">宽松</option></select></label>
+      <label>时间窗口（天）<input type="number" min="0" name="time_window_days" value="0"></label></div>
+    <div class="mapping-grid">
+      {% for prefix, file in [('a', a), ('b', b)] %}
+      {% set selected = file.sheets[0] %}
+      <div id="mapping-fields-{{ prefix }}">
+        {% include "partials/mapping_fields.html" %}
+      </div>
+      {% endfor %}
+    </div>
+    <button type="submit">开始分析</button>
+  </form>
+</section>

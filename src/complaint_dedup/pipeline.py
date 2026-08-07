@@ -52,11 +52,11 @@ class JobProcessor:
             connection.execute(
                 """
                 INSERT INTO jobs (
-                    id, status, stage, match_preset, time_window_days,
+                    id, name, status, stage, match_preset, time_window_days,
                     source_a_name, source_b_name, total_records
-                ) VALUES (?, 'queued', 'queued', ?, ?, 'A', 'B', ?)
+                ) VALUES (?, ?, 'queued', 'queued', ?, ?, 'A', 'B', ?)
                 """,
-                (job_id, match_preset, time_window_days, len(records_a) + len(records_b)),
+                (job_id, name, match_preset, time_window_days, len(records_a) + len(records_b)),
             )
             for record in [*records_a, *records_b]:
                 raw = record.raw_fields or {
@@ -98,6 +98,9 @@ class JobProcessor:
         self._generate_candidates(job_id)
         self._set_job(job_id, status="running", stage="judging")
         await self._judge_pending(job_id)
+        if self._pause_requested(job_id):
+            self._set_job(job_id, status="paused", stage="judging")
+            return
 
         failures = self.get_job(job_id)["extraction_failure_count"] + self.get_job(job_id)[
             "judgement_failure_count"
@@ -115,19 +118,41 @@ class JobProcessor:
             raise KeyError(job_id)
         return dict(row)
 
-    def list_pairs(self, job_id: str) -> list[dict[str, Any]]:
+    def list_pairs(
+        self, job_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
         with connect_database(self.database_path) as connection:
             rows = connection.execute(
                 """
-                SELECT p.*, r.decision AS review_decision, r.note AS review_note
+                SELECT p.*, r.decision AS review_decision, r.note AS review_note,
+                       a.work_order_id AS a_work_order_id, a.title AS a_title,
+                       a.appeal_text AS a_appeal_text, a.extraction_json AS a_extraction_json,
+                       b.work_order_id AS b_work_order_id, b.title AS b_title,
+                       b.appeal_text AS b_appeal_text, b.extraction_json AS b_extraction_json
                 FROM candidate_pairs p
                 LEFT JOIN reviews r ON r.candidate_pair_id = p.id
+                JOIN records a ON a.id = p.record_a_id
+                JOIN records b ON b.id = p.record_b_id
                 WHERE p.job_id = ?
                 ORDER BY p.id
+                LIMIT ? OFFSET ?
                 """,
-                (job_id,),
+                (job_id, limit, offset),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["hard_conflicts"] = _json_value(item.get("hard_conflicts_json"), [])
+            item["evidence"] = _json_value(item.get("evidence_json"), {})
+            result.append(item)
+        return result
+
+    def count_pairs(self, job_id: str) -> int:
+        with connect_database(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM candidate_pairs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return int(row["total"])
 
     def list_groups(self, job_id: str) -> list[dict[str, Any]]:
         with connect_database(self.database_path) as connection:
@@ -144,7 +169,14 @@ class JobProcessor:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def review_pair(self, pair_id: int, decision: str, note: str | None = None) -> None:
+    def review_pair(
+        self,
+        pair_id: int,
+        decision: str,
+        note: str | None = None,
+        *,
+        job_id: str | None = None,
+    ) -> None:
         if decision not in {"duplicate", "not_duplicate"}:
             raise ValueError("invalid review decision")
         with connect_database(self.database_path) as connection:
@@ -153,6 +185,14 @@ class JobProcessor:
             ).fetchone()
             if pair is None:
                 raise KeyError(pair_id)
+            if job_id is not None and pair["job_id"] != job_id:
+                raise KeyError(pair_id)
+            if decision == "duplicate":
+                conflicts = connection.execute(
+                    "SELECT hard_conflicts_json FROM candidate_pairs WHERE id = ?", (pair_id,)
+                ).fetchone()
+                if _json_value(conflicts["hard_conflicts_json"], []):
+                    raise ValueError("存在硬冲突，不能确认重复")
             connection.execute(
                 """
                 INSERT INTO reviews (candidate_pair_id, decision, note)
@@ -178,14 +218,18 @@ class JobProcessor:
             rows = connection.execute(
                 """
                 SELECT * FROM records
-                WHERE job_id = ? AND extraction_status != 'succeeded'
+                WHERE job_id = ?
                 ORDER BY id
                 """,
                 (job_id,),
             ).fetchall()
-        for batch_index, batch in enumerate(_chunks(rows, self.extraction_batch_size)):
+        for batch_index, full_batch in enumerate(_chunks(rows, self.extraction_batch_size)):
+            batch = [row for row in full_batch if row["extraction_status"] != "succeeded"]
+            if not batch:
+                continue
             if self._pause_requested(job_id):
                 break
+            batch_index = self._resume_batch_index(job_id, "extraction", batch_index)
             self._start_batch(job_id, "extraction", batch_index, [row["id"] for row in batch])
             payload = [
                 {
@@ -218,7 +262,13 @@ class JobProcessor:
                             )
                 self._finish_batch(job_id, "extraction", batch_index, response.model_dump_json())
             except Exception as exc:
-                self._fail_batch(job_id, "extraction", batch_index, str(exc))
+                self._fail_batch(
+                    job_id,
+                    "extraction",
+                    batch_index,
+                    str(exc),
+                    getattr(exc, "raw_response", None),
+                )
                 with connect_database(self.database_path) as connection:
                     connection.executemany(
                         "UPDATE records SET extraction_status = 'failed', extraction_error = ? WHERE id = ?",
@@ -228,11 +278,14 @@ class JobProcessor:
 
     def _generate_candidates(self, job_id: str) -> None:
         records_a, records_b = self._load_extracted_records(job_id)
+        job = self.get_job(job_id)
         pairs = generate_candidate_pairs(
             records_a,
             records_b,
             self.max_candidates_per_record,
             self.broad_key_max_matches,
+            preset=job["match_preset"],
+            time_window_days=job["time_window_days"],
         )
         with connect_database(self.database_path) as connection:
             for pair in pairs:
@@ -264,14 +317,18 @@ class JobProcessor:
                 FROM candidate_pairs p
                 JOIN records a ON a.id = p.record_a_id
                 JOIN records b ON b.id = p.record_b_id
-                WHERE p.job_id = ? AND p.judgement_status != 'succeeded'
+                WHERE p.job_id = ?
                 ORDER BY p.id
                 """,
                 (job_id,),
             ).fetchall()
-        for batch_index, batch in enumerate(_chunks(rows, self.judgement_batch_size)):
+        for batch_index, full_batch in enumerate(_chunks(rows, self.judgement_batch_size)):
+            batch = [row for row in full_batch if row["judgement_status"] != "succeeded"]
+            if not batch:
+                continue
             if self._pause_requested(job_id):
                 break
+            batch_index = self._resume_batch_index(job_id, "judgement", batch_index)
             self._start_batch(job_id, "judgement", batch_index, [row["id"] for row in batch])
             payload = [
                 {
@@ -334,7 +391,13 @@ class JobProcessor:
                             )
                 self._finish_batch(job_id, "judgement", batch_index, response.model_dump_json())
             except Exception as exc:
-                self._fail_batch(job_id, "judgement", batch_index, str(exc))
+                self._fail_batch(
+                    job_id,
+                    "judgement",
+                    batch_index,
+                    str(exc),
+                    getattr(exc, "raw_response", None),
+                )
                 with connect_database(self.database_path) as connection:
                     connection.executemany(
                         "UPDATE candidate_pairs SET judgement_status = 'failed', judgement_error = ? WHERE id = ?",
@@ -347,7 +410,7 @@ class JobProcessor:
     ) -> tuple[list[ExtractedRecord], list[ExtractedRecord]]:
         with connect_database(self.database_path) as connection:
             rows = connection.execute(
-                "SELECT id, source, extraction_json FROM records WHERE job_id = ? AND extraction_status = 'succeeded'",
+                "SELECT id, source, received_at, extraction_json FROM records WHERE job_id = ? AND extraction_status = 'succeeded'",
                 (job_id,),
             ).fetchall()
         result = {"A": [], "B": []}
@@ -361,6 +424,7 @@ class JobProcessor:
                     exact_address_keys=tuple(data.get("address", {}).get("exact_keys", [])),
                     coarse_address_keys=tuple(data.get("address", {}).get("coarse_keys", [])),
                     primary_issue=data.get("issues", {}).get("primary"),
+                    received_at=row["received_at"],
                 )
             )
         return result["A"], result["B"]
@@ -422,6 +486,20 @@ class JobProcessor:
                 (job_id, batch_type, batch_index, json.dumps(ids)),
             )
 
+    def _resume_batch_index(self, job_id: str, batch_type: str, preferred: int) -> int:
+        with connect_database(self.database_path) as connection:
+            existing = connection.execute(
+                "SELECT status FROM llm_batches WHERE job_id = ? AND batch_type = ? AND batch_index = ?",
+                (job_id, batch_type, preferred),
+            ).fetchone()
+            if existing is None or existing["status"] != "succeeded":
+                return preferred
+            row = connection.execute(
+                "SELECT COALESCE(MAX(batch_index), -1) + 1 AS next_index FROM llm_batches WHERE job_id = ? AND batch_type = ?",
+                (job_id, batch_type),
+            ).fetchone()
+        return int(row["next_index"])
+
     def _finish_batch(self, job_id: str, batch_type: str, batch_index: int, response: str) -> None:
         with connect_database(self.database_path) as connection:
             connection.execute(
@@ -433,14 +511,22 @@ class JobProcessor:
                 (response, job_id, batch_type, batch_index),
             )
 
-    def _fail_batch(self, job_id: str, batch_type: str, batch_index: int, error: str) -> None:
+    def _fail_batch(
+        self,
+        job_id: str,
+        batch_type: str,
+        batch_index: int,
+        error: str,
+        raw_response: str | None = None,
+    ) -> None:
         with connect_database(self.database_path) as connection:
             connection.execute(
                 """
-                UPDATE llm_batches SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                UPDATE llm_batches SET status = 'failed', response_json = ?, error_message = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = ? AND batch_type = ? AND batch_index = ?
                 """,
-                (error, job_id, batch_type, batch_index),
+                (raw_response, error, job_id, batch_type, batch_index),
             )
 
     def _refresh_job_counts(self, job_id: str) -> None:
@@ -472,3 +558,12 @@ class JobProcessor:
 
 def _chunks(rows: list[Any], size: int) -> list[list[Any]]:
     return [rows[index : index + size] for index in range(0, len(rows), size)]
+
+
+def _json_value(value: str | None, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return default

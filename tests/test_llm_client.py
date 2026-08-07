@@ -58,9 +58,10 @@ async def test_chat_json_raises_after_retry_budget_is_exhausted() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(LlmResponseError):
+    with pytest.raises(LlmResponseError) as error:
         await client.chat_json(
             [{"role": "user", "content": "extract"}],
             ExtractionBatchResponse,
         )
+    assert error.value.raw_response == "invalid"
     await client.aclose()

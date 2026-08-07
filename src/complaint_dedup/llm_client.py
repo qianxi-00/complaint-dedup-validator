@@ -11,7 +11,9 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 
 
 class LlmResponseError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, raw_response: str | None = None) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
 
 
 class LlmClient:
@@ -43,6 +45,7 @@ class LlmClient:
         response_model: type[ResponseModel],
     ) -> ResponseModel:
         last_error: Exception | None = None
+        raw_response: str | None = None
         for _ in range(self._max_retries):
             try:
                 response = await self._client.post(
@@ -55,11 +58,31 @@ class LlmClient:
                 )
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"]
+                raw_response = str(content)
                 payload = json.loads(_strip_code_fence(content))
                 return response_model.model_validate(payload)
             except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
-        raise LlmResponseError("模型响应无法通过结构化校验") from last_error
+                if isinstance(exc, httpx.HTTPStatusError):
+                    raw_response = exc.response.text
+        raise LlmResponseError(
+            "模型响应无法通过结构化校验", raw_response=raw_response
+        ) from last_error
+
+    async def test_connection(self) -> str:
+        if not self._model:
+            raise LlmResponseError("未配置 LLM_MODEL")
+        response = await self._client.post(
+            "chat/completions",
+            json={
+                "model": self._model,
+                "messages": [{"role": "user", "content": "只回复 OK"}],
+                "temperature": 0,
+            },
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        return f"连接成功：{str(content).strip()[:80]}"
 
     async def aclose(self) -> None:
         await self._client.aclose()

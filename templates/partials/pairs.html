@@ -1,0 +1,15 @@
+<section class="panel"><h2>候选对人工复核</h2>
+<table><thead><tr><th>ID</th><th>A 投诉</th><th>B 投诉</th><th>模型结论</th><th>证据/冲突</th><th>人工操作</th></tr></thead><tbody>
+{% for pair in pairs %}<tr>
+  <td>{{ pair.id }}<br><span class="muted">{{ pair.candidate_key }}</span></td>
+  <td><strong>{{ pair.a_work_order_id or "" }}</strong><br>{{ pair.a_title or "" }}<br>{{ pair.a_appeal_text or "" }}</td>
+  <td><strong>{{ pair.b_work_order_id or "" }}</strong><br>{{ pair.b_title or "" }}<br>{{ pair.b_appeal_text or "" }}</td>
+  <td>{{ pair.llm_decision or pair.judgement_status }}<br>{{ "%.2f"|format(pair.confidence or 0) }}</td>
+  <td>{{ pair.evidence.get("reason", "") }}{% if pair.hard_conflicts %}<br><span class="danger-text">硬冲突：{{ pair.hard_conflicts|join("；") }}</span>{% endif %}</td>
+  <td><span>{{ pair.review_decision or "待确认" }}</span><form class="inline" action="/jobs/{{ job_id or job.id }}/pairs/{{ pair.id }}/review" method="post">
+    <button name="decision" value="duplicate" {% if pair.hard_conflicts %}disabled title="存在硬冲突"{% endif %}>确认重复</button><button class="danger" name="decision" value="not_duplicate">否决</button>
+  </form></td>
+</tr>{% else %}<tr><td colspan="6">暂无候选对。</td></tr>{% endfor %}
+</tbody></table>
+<div class="pagination"><span>第 {{ pair_page or 1 }} 页</span>{% if (pair_page or 1) > 1 %}<a class="button secondary" hx-get="/jobs/{{ job_id or job.id }}/pairs?page={{ (pair_page or 1) - 1 }}" hx-target="#pairs-panel" hx-swap="innerHTML">上一页</a>{% endif %}{% if pair_has_next %}<a class="button secondary" hx-get="/jobs/{{ job_id or job.id }}/pairs?page={{ (pair_page or 1) + 1 }}" hx-target="#pairs-panel" hx-swap="innerHTML">下一页</a>{% endif %}</div>
+</section>

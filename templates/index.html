@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div><h1>跨表重复工单识别</h1><p>上传文件 A 与文件 B，仅进行跨表比较。</p></div>
+  <div class="model-state">模型：{{ settings.llm_model or "未配置" }}</div>
+</section>
+
+<section class="panel">
+  <h2>文件上传</h2>
+  <form hx-post="/uploads/inspect" hx-target="#inspection" hx-encoding="multipart/form-data" class="upload-grid">
+    <label>文件 A<input type="file" name="file_a" accept=".xlsx,.xls,.csv" required></label>
+    <label>文件 B<input type="file" name="file_b" accept=".xlsx,.xls,.csv" required></label>
+    <button type="submit">检查文件</button>
+  </form>
+</section>
+<div id="inspection"></div>
+
+{% if jobs %}
+<section class="panel"><h2>最近任务</h2>
+  <table><thead><tr><th>任务</th><th>状态</th><th>阶段</th><th>工单数</th><th></th></tr></thead><tbody>
+  {% for job in jobs %}<tr><td>{{ job.name or job.id[:10] }}</td><td>{{ job.status }}</td><td>{{ job.stage }}</td><td>{{ job.total_records }}</td><td><a href="/jobs/{{ job.id }}">查看</a></td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+{% endblock %}

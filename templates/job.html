@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-heading"><div id="job-status" hx-get="/jobs/{{ job.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML"><h1>任务 {{ job.id[:10] }}</h1><p>{{ job.status }} · {{ job.stage }}</p></div><a class="button secondary" href="/jobs/{{ job.id }}/export">导出 XLSX</a></section>
+<section class="stats">
+  <div><span>总工单</span><strong>{{ job.total_records }}</strong></div><div><span>已抽取</span><strong>{{ job.extracted_records }}</strong></div><div><span>候选对</span><strong>{{ job.candidate_count }}</strong></div><div><span>已二审</span><strong>{{ job.judged_count }}</strong></div><div><span>失败</span><strong>{{ job.extraction_failure_count + job.judgement_failure_count }}</strong></div>
+</section>
+<section class="panel actions"><form action="/jobs/{{ job.id }}/pause" method="post"><button>暂停</button></form><form action="/jobs/{{ job.id }}/resume" method="post"><button class="secondary">继续</button></form><a class="button secondary" href="/jobs/{{ job.id }}">手动刷新</a></section>
+<div id="pairs-panel">{% include "partials/pairs.html" %}</div>
+{% if groups %}<section class="panel"><h2>已确认事件组</h2><table><thead><tr><th>ID</th><th>事件名称</th><th>成员数</th></tr></thead><tbody>{% for group in groups %}<tr><td>{{ group.id }}</td><td>{{ group.name }}</td><td>{{ group.member_count }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% endblock %}

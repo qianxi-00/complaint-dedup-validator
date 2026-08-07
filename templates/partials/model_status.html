@@ -1,0 +1,6 @@
+<section class="panel" id="model-status">
+  <p>模型状态：{{ "已配置" if settings.llm_model else "未配置" }}</p>
+  <p>地址：{{ settings.llm_base_url }}</p><p>模型：{{ settings.llm_model or "未配置" }}</p><p>API Key：{{ "已配置" if settings.llm_api_key else "未配置" }}</p>
+  <p class="status">{{ result }}</p>
+  <button hx-post="/model/test" hx-target="#model-status" hx-swap="outerHTML">再次测试</button>
+</section>

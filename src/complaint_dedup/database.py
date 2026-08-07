@@ -5,6 +5,7 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'queued',
     stage TEXT NOT NULL DEFAULT 'queued',
     match_preset TEXT NOT NULL DEFAULT 'balanced',
@@ -121,3 +122,6 @@ def initialize_database(path: str | Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with connect_database(database_path) as connection:
         connection.executescript(SCHEMA)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+        if "name" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
