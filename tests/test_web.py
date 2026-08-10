@@ -94,7 +94,7 @@ def test_settings_page_reports_model_configuration(tmp_path: Path) -> None:
 
 
 def test_create_job_rejects_when_model_is_not_configured(tmp_path: Path) -> None:
-    app_settings = Settings(database_path=tmp_path / "app.db")
+    app_settings = Settings(database_path=tmp_path / "app.db", llm_model="")
     app = create_app(app_settings, start_worker=False)
     csv_a = "工单编号,诉求标题,市民诉求\nA1,甲公司欠薪,地址：金瓯路188号\n".encode()
     csv_b = "工单编号,诉求标题,市民诉求\nB1,甲公司工资未发,地址：金瓯路188号\n".encode()

@@ -416,13 +416,39 @@ class JobProcessor:
         result = {"A": [], "B": []}
         for row in rows:
             data = json.loads(row["extraction_json"])
+            subject = data.get("subject", {})
+            address = data.get("address", {})
+            subject_keys = _unique_strings(
+                [
+                    *subject.get("keys", []),
+                    subject.get("full_name"),
+                    subject.get("short_name"),
+                    subject.get("brand"),
+                    subject.get("branch"),
+                ]
+            )
+            exact_keys = list(_unique_strings(address.get("exact_keys", [])))
+            structured_exact = _joined_key(
+                address.get("road"),
+                address.get("house_no"),
+                address.get("building"),
+                address.get("shop_no"),
+            )
+            if structured_exact and structured_exact not in exact_keys:
+                exact_keys.append(structured_exact)
+            coarse_keys = list(_unique_strings(address.get("coarse_keys", [])))
+            structured_coarse = _joined_key(
+                address.get("district"), address.get("street"), address.get("road")
+            )
+            if structured_coarse and structured_coarse not in coarse_keys:
+                coarse_keys.append(structured_coarse)
             result[row["source"]].append(
                 ExtractedRecord(
                     record_id=row["id"],
                     source=row["source"],
-                    subject_keys=tuple(data.get("subject", {}).get("keys", [])),
-                    exact_address_keys=tuple(data.get("address", {}).get("exact_keys", [])),
-                    coarse_address_keys=tuple(data.get("address", {}).get("coarse_keys", [])),
+                    subject_keys=tuple(subject_keys),
+                    exact_address_keys=tuple(exact_keys),
+                    coarse_address_keys=tuple(coarse_keys),
                     primary_issue=data.get("issues", {}).get("primary"),
                     received_at=row["received_at"],
                 )
@@ -567,3 +593,17 @@ def _json_value(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return default
+
+
+def _unique_strings(values: list[Any]) -> list[str]:
+    result = []
+    for value in values:
+        text = str(value).strip() if value is not None else ""
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _joined_key(*values: Any) -> str | None:
+    parts = _unique_strings(list(values))
+    return "|".join(parts) if parts else None

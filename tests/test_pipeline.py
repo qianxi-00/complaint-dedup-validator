@@ -341,3 +341,30 @@ def test_hard_conflict_cannot_be_confirmed_as_duplicate(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="硬冲突"):
         processor.review_pair(cursor.lastrowid, "duplicate", job_id=job_id)
+
+
+def test_candidate_keys_include_structured_subject_and_address_fields(tmp_path: Path) -> None:
+    database = tmp_path / "app.db"
+    initialize_database(database)
+    processor = JobProcessor(database, FakeLlmClient([]), 20, 20, 50, 200)
+    job_id = processor.create_job(
+        "structured keys",
+        [InputRecord("A", 2, "A", "甲公司", "消费", "金瓯路188号")],
+        [InputRecord("B", 2, "B", "甲公司", "消费", "金瓯路188号")],
+    )
+    extraction_data = {
+        "record_id": "unused",
+        "subject": {"short_name": "甲公司", "keys": []},
+        "address": {"road": "金瓯路", "house_no": "188", "exact_keys": []},
+        "issues": {"primary": "维修收费争议"},
+    }
+    with connect_database(database) as connection:
+        connection.execute(
+            "UPDATE records SET extraction_status = 'succeeded', extraction_json = ? WHERE job_id = ?",
+            (json.dumps(extraction_data, ensure_ascii=False), job_id),
+        )
+
+    records_a, records_b = processor._load_extracted_records(job_id)
+
+    assert records_a[0].subject_keys == ("甲公司",)
+    assert records_b[0].exact_address_keys == ("金瓯路|188",)

@@ -7,6 +7,30 @@ from complaint_dedup.llm_models import (
 )
 
 
+def test_judgement_accepts_structured_evidence_items() -> None:
+    response = JudgementBatchResponse.model_validate(
+        {
+            "pairs": [
+                {
+                    "pair_id": "1|2",
+                    "decision": "duplicate",
+                    "confidence": 0.9,
+                    "subject_relation": "same",
+                    "address_relation": "exact",
+                    "issue_relation": "same",
+                    "new_independent_issue": False,
+                    "hard_conflicts": [],
+                    "evidence_a": [{"title": "甲公司维修收费"}],
+                    "evidence_b": [{"title": "甲公司维修费用"}],
+                    "reason": "主体、地址和问题一致",
+                }
+            ]
+        }
+    )
+
+    assert response.pairs[0].evidence_a == ['{"title":"甲公司维修收费"}']
+
+
 def test_extraction_batch_requires_matching_record_ids() -> None:
     payload = {
         "records": [

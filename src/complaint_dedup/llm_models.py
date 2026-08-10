@@ -1,6 +1,7 @@
-from typing import Literal
+import json
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SubjectExtraction(BaseModel):
@@ -59,6 +60,18 @@ class JudgedPair(BaseModel):
     evidence_b: list[str] = Field(default_factory=list)
     reason: str
     event_name: str | None = None
+
+    @field_validator("evidence_a", "evidence_b", mode="before")
+    @classmethod
+    def normalize_evidence(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        return [
+            item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+            for item in value
+        ]
 
 
 class JudgementBatchResponse(BaseModel):
