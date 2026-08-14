@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}批次历史{% endblock %}
+{% block nav %}<nav><a href="/">批次导入</a><a href="/batches">批次历史</a><a href="/events">事件库</a></nav>{% endblock %}
+{% block content %}
+<section class="page-heading"><div><h1>批次历史</h1><p>冷启动、每日新增和补录批次。</p></div></section>
+<section class="panel"><table><thead><tr><th>批次</th><th>类型</th><th>状态</th><th>阶段</th><th>工单数</th><th>最近操作</th><th></th></tr></thead><tbody>
+{% for batch in batches %}<tr><td>{{ batch.name }}</td><td>{{ label(batch.batch_type) }}</td><td>{{ label(batch.status) }}</td><td>{{ stage_label(batch.stage) }}</td><td>{{ batch.total_records }}</td><td>{{ batch.updated_at }}</td><td><a href="/batches/{{ batch.id }}">查看</a></td></tr>{% else %}<tr><td colspan="7" class="muted">暂无批次</td></tr>{% endfor %}
+</tbody></table></section>
+{% endblock %}

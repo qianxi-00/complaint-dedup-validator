@@ -1,0 +1,59 @@
+services:
+  migrate:
+    image: complaint-dedup-validator:latest
+    build:
+      context: ./app
+      dockerfile: ../image/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    env_file:
+      - ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./app:/app:ro
+
+  api:
+    image: complaint-dedup-validator:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./app:/app:ro
+      - ./runtime:/app/runtime
+    ports:
+      - "0.0.0.0:28765:8765"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: complaint-dedup-validator:latest
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "complaint_dedup.worker_main"]
+    env_file:
+      - ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./app:/app:ro
+      - ./runtime:/app/runtime
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}词典审核工作台{% endblock %}
+{% block nav %}<nav><a href="/">批次导入</a><a href="/batches">批次历史</a><a href="/events">事件库</a></nav>{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><h1>词典审核工作台</h1><p>{{ batch.name }} · {{ dictionary.version }}</p></div>
+  <div class="action-row"><a class="button secondary" href="/batches/{{ batch.id }}/dictionary/export">导出词典种子</a><a class="button secondary" href="/batches/{{ batch.id }}">返回批次</a></div>
+</section>
+
+<section class="stats corpus-stats">
+  <div><span>街道待审</span><strong>{{ summary.street.candidate or 0 }}</strong></div>
+  <div><span>地点待审</span><strong>{{ summary.anchor.candidate or 0 }}</strong></div>
+  <div><span>问题待审</span><strong>{{ summary.issue.candidate or 0 }}</strong></div>
+  <div><span>已通过</span><strong>{{ (summary.street.approved or 0) + (summary.anchor.approved or 0) + (summary.issue.approved or 0) }}</strong></div>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <div class="tabs">
+      <a class="button {{ 'secondary' if dimension != 'street' else '' }}" href="?dimension=street">标准街道</a>
+      <a class="button {{ 'secondary' if dimension != 'anchor' else '' }}" href="?dimension=anchor">地点 / 主体</a>
+      <a class="button {{ 'secondary' if dimension != 'issue' else '' }}" href="?dimension=issue">核心问题</a>
+    </div>
+    <form method="post" action="/batches/{{ batch.id }}/dictionary/bulk-approve" class="inline-form">
+      <label>最小证据数<input type="number" name="min_evidence" value="2" min="2"></label>
+      <button type="submit" class="secondary">批量通过高频低风险项</button>
+    </form>
+  </div>
+  <form method="get" class="filters compact-filters">
+    <input type="hidden" name="dimension" value="{{ dimension }}">
+    <label>审核状态<select name="status"><option value="">全部</option><option value="candidate" {% if status == 'candidate' %}selected{% endif %}>待审核</option><option value="approved" {% if status == 'approved' %}selected{% endif %}>已通过</option><option value="rejected" {% if status == 'rejected' %}selected{% endif %}>已拒绝</option><option value="uncertain" {% if status == 'uncertain' %}selected{% endif %}>存疑</option></select></label>
+    <button type="submit">筛选</button>
+  </form>
+
+  <table>
+    <thead><tr><th>标准名称</th><th>类型 / 分类</th><th>证据数</th><th>别名数</th><th>状态</th><th>审核操作</th></tr></thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td><a href="/batches/{{ batch.id }}/dictionary/{{ dimension }}/{{ item.id }}">{{ item.canonical_name }}</a></td>
+        <td>{{ item.anchor_type or item.region or item.category_level_3 or '-' }}</td>
+        <td>{{ item.evidence_count }}</td>
+        <td>{{ item.alias_count }}</td>
+        <td>{% if item.review_status == 'approved' %}已通过{% elif item.review_status == 'rejected' %}已拒绝{% elif item.review_status == 'uncertain' %}存疑{% else %}待审核{% endif %}</td>
+        <td class="action-row">
+          <form method="post" action="/batches/{{ batch.id }}/dictionary/{{ dimension }}/{{ item.id }}/approve"><button type="submit" class="small-button">通过</button></form>
+          <form method="post" action="/batches/{{ batch.id }}/dictionary/{{ dimension }}/{{ item.id }}/uncertain"><button type="submit" class="small-button secondary">存疑</button></form>
+          <form method="post" action="/batches/{{ batch.id }}/dictionary/{{ dimension }}/{{ item.id }}/reject"><button type="submit" class="small-button danger">拒绝</button></form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty-state">当前筛选条件下没有词典项。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% set pages = ((total + page_size - 1) // page_size) %}
+  <div class="pagination"><span>共 {{ total }} 项</span>{% if page > 1 %}<a href="?dimension={{ dimension }}&status={{ status }}&page={{ page - 1 }}">上一页</a>{% endif %}<span>第 {{ page }} / {{ pages if pages else 1 }} 页</span>{% if page < pages %}<a href="?dimension={{ dimension }}&status={{ status }}&page={{ page + 1 }}">下一页</a>{% endif %}</div>
+</section>
+{% endblock %}

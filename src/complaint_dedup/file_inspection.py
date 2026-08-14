@@ -38,7 +38,11 @@ FIELD_ALIASES = {
     "work_order_id": ("work_order_id", "工单编号", "工单号", "受理编号", "编号"),
     "received_at": ("received_at", "受理时间", "受理日期", "创建时间", "来件时间"),
     "title": ("title", "诉求标题", "工单标题", "投诉标题", "标题"),
-    "category": ("category", "事项分类四级", "事项分类", "诉求分类", "分类"),
+    "category_level_1": ("category_level_1", "事项分类一级", "一级事项分类"),
+    "category_level_2": ("category_level_2", "事项分类二级", "二级事项分类"),
+    "category_level_3": ("category_level_3", "事项分类三级", "三级事项分类"),
+    "category_level_4": ("category_level_4", "事项分类四级", "四级事项分类"),
+    "category": ("category", "事项分类", "最终事项分类", "诉求分类", "分类"),
     "appeal_text": (
         "appeal_text",
         "市民诉求",

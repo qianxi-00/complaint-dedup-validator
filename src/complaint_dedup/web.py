@@ -6,21 +6,26 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from complaint_dedup.config import Settings, get_settings
 from complaint_dedup.database import connect_database, initialize_database
+from complaint_dedup.evaluator import evaluate_explicit_pairs, export_evaluation, load_explicit_pairs
 from complaint_dedup.exporter import export_job
 from complaint_dedup.file_inspection import inspect_input_file
 from complaint_dedup.llm_client import LlmClient
 from complaint_dedup.pipeline import InputRecord, JobProcessor
+from complaint_dedup.ui_labels import label, stage_label
 from complaint_dedup.worker import JobRunner
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = Jinja2Templates(directory=PROJECT_ROOT / "templates")
+TEMPLATES.env.filters["zh"] = label
+TEMPLATES.env.filters["stage_zh"] = stage_label
 
 
 def create_app(
@@ -43,6 +48,8 @@ def create_app(
         timeout_seconds=config.llm_timeout_seconds,
         max_retries=config.llm_max_retries,
         temperature=config.llm_temperature,
+        max_tokens=config.llm_max_tokens,
+        enable_thinking=config.llm_enable_thinking,
     )
     processor = JobProcessor(
         config.database_path,
@@ -109,6 +116,41 @@ def create_app(
         return TEMPLATES.TemplateResponse(
             request, "partials/model_status.html", {"settings": config, "result": result}
         )
+
+    @app.post("/evaluate/pairs")
+    async def evaluate_pairs_route(request: Request):
+        payload = await request.json()
+        pairs = payload.get("pairs") if isinstance(payload, dict) else None
+        if not isinstance(pairs, list) or not pairs:
+            raise HTTPException(400, "pairs 必须是非空数组")
+        try:
+            results = await evaluate_explicit_pairs(
+                client,
+                pairs,
+                batch_size=config.llm_judgement_batch_size,
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return JSONResponse({"pairs": [item.model_dump() for item in results]})
+
+    @app.post("/evaluate/upload")
+    async def evaluate_upload(file: UploadFile = File(...)):
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".xlsx", ".xls", ".csv"}:
+            raise HTTPException(400, "评测文件仅支持 xlsx、xls、csv")
+        evaluation_dir = runtime_dir / "evaluations" / uuid.uuid4().hex
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        input_path = evaluation_dir / f"pairs{suffix}"
+        input_path.write_bytes(await file.read())
+        try:
+            pairs = load_explicit_pairs(input_path)
+            results = await evaluate_explicit_pairs(
+                client, pairs, batch_size=config.llm_judgement_batch_size
+            )
+            output = export_evaluation(pairs, results, evaluation_dir / "evaluation.xlsx")
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return FileResponse(output, filename="complaint-pair-evaluation.xlsx")
 
     @app.post("/uploads/inspect", response_class=HTMLResponse)
     async def inspect_uploads(
@@ -337,6 +379,10 @@ def _load_records(path: Path, sheet: str, mapping: dict[str, str], source: str) 
                 title=_text(value(row, "title")),
                 category=_text(value(row, "category")),
                 appeal_text=_text(value(row, "appeal_text")),
+                category_level_1=_text(value(row, "category_level_1")),
+                category_level_2=_text(value(row, "category_level_2")),
+                category_level_3=_text(value(row, "category_level_3")),
+                category_level_4=_text(value(row, "category_level_4")),
                 raw_fields={str(key): _text(item) for key, item in row.to_dict().items()},
             )
         )

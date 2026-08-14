@@ -85,13 +85,28 @@ def test_csv_encoding_can_be_overridden(tmp_path: Path) -> None:
 
 def test_suggests_canonical_field_mapping() -> None:
     mapping = suggest_field_mapping(
-        ["工单号", "受理日期", "工单标题", "事项分类", "投诉内容", "备注"]
+        [
+            "工单号",
+            "受理日期",
+            "工单标题",
+            "事项分类一级",
+            "事项分类二级",
+            "事项分类三级",
+            "事项分类四级",
+            "事项分类",
+            "投诉内容",
+            "备注",
+        ]
     )
 
     assert mapping == {
         "work_order_id": "工单号",
         "received_at": "受理日期",
         "title": "工单标题",
+        "category_level_1": "事项分类一级",
+        "category_level_2": "事项分类二级",
+        "category_level_3": "事项分类三级",
+        "category_level_4": "事项分类四级",
         "category": "事项分类",
         "appeal_text": "投诉内容",
     }
@@ -104,6 +119,10 @@ def test_mapping_marks_unknown_fields_as_none() -> None:
         "work_order_id",
         "received_at",
         "title",
+        "category_level_1",
+        "category_level_2",
+        "category_level_3",
+        "category_level_4",
         "category",
         "appeal_text",
     }

@@ -31,6 +31,43 @@ def test_home_page_renders_application_title(tmp_path: Path) -> None:
     assert "投诉重复验证台" in response.text
 
 
+def test_explicit_pair_evaluation_endpoint_judges_requested_pairs(tmp_path: Path) -> None:
+    from complaint_dedup.llm_models import JudgementBatchResponse
+
+    class FakeClient:
+        async def chat_json(self, messages, response_model):
+            return JudgementBatchResponse.model_validate(
+                {
+                    "pairs": [
+                        {
+                            "pair_id": "A-1|B-1",
+                            "decision": "review",
+                            "confidence": 0.5,
+                            "subject_relation": "unknown",
+                            "address_relation": "unknown",
+                            "issue_relation": "unknown",
+                            "new_independent_issue": False,
+                            "hard_conflicts": [],
+                            "evidence_a": [],
+                            "evidence_b": [],
+                            "reason": "信息不足",
+                            "matrix": {},
+                        }
+                    ]
+                }
+            )
+
+    app = create_app(settings(tmp_path), start_worker=False, llm_client=FakeClient())
+    with TestClient(app) as client:
+        response = client.post(
+            "/evaluate/pairs",
+            json={"pairs": [{"pair_id": "A-1|B-1", "a": {"title": "甲"}, "b": {"title": "乙"}}]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pairs"][0]["decision"] == "review"
+
+
 def test_upload_inspection_persists_two_files(tmp_path: Path) -> None:
     app = create_app(settings(tmp_path), start_worker=False)
     csv_a = "工单编号,诉求标题,市民诉求\nA1,甲公司欠薪,地址：金瓯路188号\n".encode()
@@ -166,6 +203,9 @@ def test_pair_list_is_paginated_and_contains_both_record_texts(tmp_path: Path) -
     assert "甲方投诉原文" in response.text
     assert "乙方投诉原文" in response.text
     assert "第 1 页" in response.text
+    assert 'class="pair-table-wrap"' in response.text
+    assert 'class="decision-badge' in response.text
+    assert 'class="record-cell"' in response.text
 
 
 def test_upload_inspection_allows_selecting_rows_from_large_multi_sheet_files(tmp_path: Path) -> None:

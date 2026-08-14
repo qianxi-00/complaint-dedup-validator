@@ -19,6 +19,10 @@ class InputRecord:
     category: str | None
     appeal_text: str | None
     received_at: str | None = None
+    category_level_1: str | None = None
+    category_level_2: str | None = None
+    category_level_3: str | None = None
+    category_level_4: str | None = None
     raw_fields: dict[str, Any] = field(default_factory=dict)
 
 
@@ -381,6 +385,7 @@ class JobProcessor:
                                             "subject_relation": item.subject_relation,
                                             "address_relation": item.address_relation,
                                             "issue_relation": item.issue_relation,
+                                            "matrix": item.matrix.model_dump(),
                                         },
                                         ensure_ascii=False,
                                     ),

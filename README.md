@@ -1,42 +1,98 @@
-# Complaint Dedup Validator
+# 投诉事件归一化与判重系统
 
-本项目是一个本机单用户的投诉重复项验证台。它只比较文件 A 与文件 B，不执行表内去重；大模型负责投诉结构化抽取和候选对二审，程序负责文件处理、候选索引、任务恢复、人工确认和 Excel 导出。
+系统采用“持续语料库 + 标准街道/锚点/问题词典 + 精确事件键”的增量架构。历史工单只在首次冷启动时导入；之后每天上传新增工单，审核后追加到冻结历史库。
 
-## 快速启动
+核心事件键为：
 
-需要 Python 3.12 和 [uv](https://docs.astral.sh/uv/)：
+```text
+street_id + anchor_id + issue_id + event_key_version
+```
+
+系统不使用相似关系的传递合并，不会因为“工单 A 像 B、B 像 C”就把三者滚成一个大簇。未通过词典审核或无法归一化的工单会保守保留为单例事件。
+
+## 业务模式
+
+- `历史库冷启动`：上传历史文件 B，抽取候选词典，审核后建立冻结事件库。
+- `首次 A/B 联合比对`：先处理并冻结 B，随后把当天文件 A 排入每日增量。
+- `每日新增`：历史库存在后只上传当天文件 A。
+- `补录或更正`：允许导入与历史时间范围重叠的数据。
+
+上传、解析、词典发布和增量提交均由后台 worker 异步执行。API 只保存文件并创建任务，页面通过 HTMX 轮询进度。
+
+## 技术栈
+
+- Python 3.12、uv
+- FastAPI、Jinja2、HTMX
+- SQLAlchemy Async、PostgreSQL/asyncpg
+- SQLite/aiosqlite 仅用于本地开发和自动化测试
+- XlsxWriter 导出、openpyxl 验证
+
+主流程不依赖 Milvus、Embedding、Rerank 或 LLM。后续若 PostgreSQL `pg_trgm` 对未知标准项召回不足，只对标准锚点和标准问题增加 pgvector/模型辅助，不向量化全部投诉原文。
+
+## 本地启动
 
 ```powershell
 uv sync
 Copy-Item .env.example .env
-# 编辑 .env，至少填写 LLM_MODEL；LLM_BASE_URL 指向本地 OpenAI 兼容接口
+uv run alembic upgrade head
 uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765
 ```
 
-也可以运行 `./start.ps1`，脚本会同步环境、启动服务并打开浏览器。
+SQLite 模式会在 API 进程内启动轻量 worker。PostgreSQL 部署应另开进程：
 
-打开 `http://127.0.0.1:8765`，依次上传 A/B 文件、选择工作表和字段映射、创建任务，在候选对页面逐条确认或否决，最后导出 XLSX。
+```powershell
+uv run python -m complaint_dedup.worker_main
+```
 
-## 模型接口
+打开 `http://127.0.0.1:8765`。
 
-默认使用 `LLM_BASE_URL` 下的 `/chat/completions`（即完整地址通常为 `http://127.0.0.1:8000/v1/chat/completions`）。请求采用 OpenAI 兼容格式，不要求服务支持 JSON Schema。模型名、超时、重试、批次大小和并发等配置全部写入 `.env`，由 `src/complaint_dedup/config.py` 统一加载。模型状态页提供连通测试。
+## 词典审核
 
-## 输入与输出
+历史解析后进入词典审核工作台，分为：
 
-输入支持 `.xlsx`、`.xls` 和 UTF-8/GB18030 `.csv`。字段可自动识别，也可以在上传后手工映射：工单编号、受理时间、诉求标题、事项分类、市民诉求。A/B 合计默认最多 10,000 行，多工作表按最终选择的工作表计数。
+- 标准街道
+- 地点/主体锚点
+- 核心问题
 
-输出文件包含五个工作表：`结果总览`、`候选对`、`事件组`、`抽取失败`、`模型失败`。只有人工确认“重复”的候选关系才会进入事件组。
+每项展示证据数、别名数和审核状态，支持通过、拒绝、存疑、改名、合并和按别名拆分。可以批量通过达到证据阈值且无跨街道同名风险的候选。候选和存疑项不会进入正式匹配。
 
-## 任务与恢复
+已发布词典不可被每日未知项直接修改。新增未知内容进入独立的 `delta-<batch_id>` 候选版本，并以单例事件保存，避免污染正式词典。
 
-任务元数据、原始字段和模型批次状态保存在 SQLite；上传文件和导出结果位于 `runtime/`。程序重启后，未完成的运行批次会回到队列，已经成功的记录不会再次请求模型。暂停/继续通过任务页面手动操作。
+## 导出
 
-## 公开仓库安全边界
+全量导出包含两个工作表：
 
-`.env`、原始 Word/Excel/CSV、运行数据库、日志和真实模型响应均被 `.gitignore` 排除。公开仓库只应提交脱敏夹具和代码，不要把真实投诉数据复制到测试目录。
+- `重复项`
+- `孤立工单`
+
+第一列为事件名称，后续列保持历史表原始业务字段及顺序。同事件行相邻，并按事件交替使用浅蓝 `#EAF2FB` 和浅米 `#FFF8E7`；同时保留冻结首行、自动筛选、自动换行和公式注入防护。
 
 ## 测试
 
 ```powershell
 uv run pytest -q
 ```
+
+测试覆盖解析、词典状态、事件键、异步租约、上传队列、人工剔除、导出完整性和 Alembic 迁移。
+
+## Docker 部署
+
+`deploy/compose.yaml` 将代码、配置、运行数据和依赖镜像分离：
+
+```text
+complaint-dedup-validator/
+├── image/Dockerfile
+├── app/
+├── config/.env
+├── runtime/
+└── compose.yaml
+```
+
+首次或依赖变化时重建镜像；普通代码更新只同步 `app/` 并重启容器。部署顺序：
+
+```bash
+docker compose run --rm migrate
+docker compose up -d api worker
+```
+
+默认对外端口为 `28765`。生产环境凭据只写入服务器 `config/.env`，不得提交 Git。

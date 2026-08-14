@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}事件库{% endblock %}
+{% block nav %}<nav><a href="/">批次导入</a><a href="/batches">批次历史</a><a href="/events">事件库</a></nav>{% endblock %}
+{% block content %}
+<section class="page-heading"><div><h1>事件库</h1><p>不同标准键不会通过相似关系传递合并。</p></div><a class="button" href="/exports/corpus">导出全量结果</a></section>
+<section class="panel">
+  <form method="get" action="/events" class="event-filter-grid corpus-event-filters">
+    <label>地区<select name="region" onchange="this.form.submit()"><option value="">全部地区</option>{% for value in filter_options.regions %}<option value="{{ value }}" {% if filters.region == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>街道<select name="street" onchange="this.form.submit()"><option value="">全部街道</option>{% for value in filter_options.streets %}<option value="{{ value }}" {% if filters.street == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>事项<select name="issue"><option value="">全部事项</option>{% for value in filter_options.issues %}<option value="{{ value }}" {% if filters.issue == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>事件名称<input name="event_name" value="{{ filters.event_name }}" placeholder="输入地点或问题"></label>
+    <div class="event-filter-actions"><button type="submit">筛选</button><a class="button secondary" href="/events">重置</a></div>
+  </form>
+  <p class="muted">共 {{ total }} 个事件，每页 10 个。</p>
+  <table><thead><tr><th>事件名称</th><th>地区</th><th>街道</th><th>事项</th><th>工单数</th><th>首次受理</th><th>最后受理</th></tr></thead><tbody>
+{% for event in events %}<tr><td><a class="event-link" href="/events/{{ event.id }}">{{ event.event_name }}</a></td><td>{{ event.region or '-' }}</td><td>{{ event.street_name }}</td><td>{{ event.issue_name }}</td><td>{{ event.member_count }}</td><td>{{ event.first_received_at or '-' }}</td><td>{{ event.last_received_at or '-' }}</td></tr>{% else %}<tr><td colspan="7" class="muted">没有符合筛选条件的事件</td></tr>{% endfor %}
+  </tbody></table>
+  <div class="pagination">
+    {% if page > 1 %}<a class="button secondary" href="/events?region={{ filters.region }}&street={{ filters.street }}&issue={{ filters.issue }}&event_name={{ filters.event_name }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    <span>第 {{ page }} 页</span>
+    {% if page * page_size < total %}<a class="button secondary" href="/events?region={{ filters.region }}&street={{ filters.street }}&issue={{ filters.issue }}&event_name={{ filters.event_name }}&page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+</section>
+{% endblock %}
