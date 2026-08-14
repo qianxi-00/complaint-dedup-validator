@@ -11,6 +11,12 @@ _ROAD_HOUSE_RE = re.compile(
     r"\s*(?P<house_no>\d+(?:号|號)?)"
 )
 _BUILDING_RE = re.compile(r"(?P<building>\d{1,4}(?:幢|栋|棟|座))")
+_UNIT_RE = re.compile(r"(?P<unit>\d{1,3}(?:单元|单元楼))")
+_ROOM_RE = re.compile(r"(?P<room>\d{1,4}(?:室|房))")
+_SHOP_RE = re.compile(
+    r"(?:商铺|店铺|铺位)\s*(?P<shop_no>[A-Za-z0-9\u4e00-\u9fff-]+)"
+)
+_FLOOR_RE = re.compile(r"(?P<floor>\d{1,3}(?:层|楼))")
 _DIRECTION_WORDS = (
     "门口",
     "门前",
@@ -58,6 +64,10 @@ class ComplaintParseResult:
     road: str | None = None
     house_no: str | None = None
     building: str | None = None
+    unit: str | None = None
+    room: str | None = None
+    shop_no: str | None = None
+    floor: str | None = None
     anchor_raw: str | None = None
     anchor_type: str = "unknown"
     direction: str | None = None
@@ -146,12 +156,19 @@ def parse_complaint(
     building_match = _BUILDING_RE.search(scoped_address)
     if building_match:
         building = building_match.group("building")
+    unit_match = _UNIT_RE.search(scoped_address)
+    unit = unit_match.group("unit") if unit_match else None
+    room_match = _ROOM_RE.search(scoped_address)
+    room = room_match.group("room") if room_match else None
+    shop_match = _SHOP_RE.search(scoped_address)
+    shop_no = shop_match.group("shop_no") if shop_match else None
+    floor_match = _FLOOR_RE.search(scoped_address)
+    floor = floor_match.group("floor") if floor_match else None
 
     anchor = scoped_address
-    if road_match:
-        anchor = anchor.replace(road_match.group(0), "", 1)
-    if building:
-        anchor = anchor.replace(building, "", 1)
+    for match in (road_match, building_match, unit_match, room_match, shop_match, floor_match):
+        if match:
+            anchor = anchor.replace(match.group(0), "", 1)
     anchor = re.sub(r"^[\s,，。:：-]+|[\s,，。:：-]+$", "", anchor)
     anchor = re.sub(r"^(?:地址|事发地点)\s*[:：]?", "", anchor).strip()
 
@@ -166,6 +183,10 @@ def parse_complaint(
         road=road,
         house_no=house_no,
         building=building,
+        unit=unit,
+        room=room,
+        shop_no=shop_no,
+        floor=floor,
         anchor_raw=anchor,
         anchor_type=anchor_type,
         direction=direction,

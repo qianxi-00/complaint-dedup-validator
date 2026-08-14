@@ -1034,6 +1034,8 @@ class CorpusRepository:
                 parts.get("house_no"),
                 parts.get("building"),
                 parts.get("direction"),
+                parts.get("shop_no"),
+                parts.get("floor"),
             )
         )
         async with self.database.engine.begin() as connection:
@@ -1201,6 +1203,8 @@ class CorpusRepository:
                         item.get("house_no"),
                         item.get("building"),
                         item.get("direction"),
+                        item.get("shop_no"),
+                        item.get("floor"),
                     )
                 )
                 value.setdefault("alias", item["canonical_name"])
@@ -1536,6 +1540,100 @@ class CorpusRepository:
                 await self._refresh_event_dates(connection, event_id)
                 assigned.add(record_id)
         return assigned
+
+    async def assign_strong_signal_records(self, batch_id: str) -> set[int]:
+        """Assign unresolved records when a scoped title or phone match is unique."""
+        batch_join = corpus_records.join(
+            batch_records, batch_records.c.record_id == corpus_records.c.id
+        )
+        async with self.database.engine.begin() as connection:
+            source_rows = (
+                await connection.execute(
+                    select(corpus_records)
+                    .select_from(batch_join)
+                    .where(batch_records.c.batch_id == batch_id)
+                )
+            ).mappings().all()
+            assigned_ids = {
+                int(value)
+                for value in (
+                    await connection.execute(
+                        select(corpus_event_members.c.record_id).where(
+                            corpus_event_members.c.record_id.in_(
+                                [int(row["id"]) for row in source_rows]
+                            )
+                        )
+                    )
+                ).scalars()
+            }
+            target_join = corpus_records.join(
+                corpus_event_members,
+                corpus_event_members.c.record_id == corpus_records.c.id,
+            )
+            result: set[int] = set()
+            for row in source_rows:
+                record_id = int(row["id"])
+                if record_id in assigned_ids:
+                    continue
+                if not row.get("street_id") or not row.get("issue_id"):
+                    continue
+                if not row.get("house_no") and not row.get("building"):
+                    continue
+                same_scope = [
+                    corpus_records.c.street_id == row["street_id"],
+                    corpus_records.c.issue_id == row["issue_id"],
+                    func.coalesce(corpus_records.c.road, "")
+                    == (row.get("road") or ""),
+                    func.coalesce(corpus_records.c.house_no, "")
+                    == (row.get("house_no") or ""),
+                    func.coalesce(corpus_records.c.building, "")
+                    == (row.get("building") or ""),
+                    func.coalesce(corpus_records.c.direction, "")
+                    == (row.get("direction") or ""),
+                    corpus_records.c.id != record_id,
+                ]
+                signals = []
+                if row.get("title_normalized"):
+                    signals.append(
+                        corpus_records.c.title_normalized
+                        == row["title_normalized"]
+                    )
+                if row.get("phone_is_valid") and row.get("phone_exact"):
+                    signals.append(
+                        corpus_records.c.phone_exact == row["phone_exact"]
+                    )
+                if not signals:
+                    continue
+                event_ids = {
+                    int(value)
+                    for value in (
+                        await connection.execute(
+                            select(corpus_event_members.c.event_id)
+                            .select_from(target_join)
+                            .where(*same_scope, or_(*signals))
+                            .distinct()
+                        )
+                    ).scalars()
+                }
+                if len(event_ids) != 1:
+                    continue
+                event_id = next(iter(event_ids))
+                await connection.execute(
+                    delete(corpus_event_members).where(
+                        corpus_event_members.c.record_id == record_id
+                    )
+                )
+                await connection.execute(
+                    insert(corpus_event_members).values(
+                        event_id=event_id,
+                        record_id=record_id,
+                        assignment_source="strong_signal",
+                        assigned_at=datetime.now(UTC),
+                    )
+                )
+                await self._refresh_event_dates(connection, event_id)
+                result.add(record_id)
+            return result
 
     async def get_or_create_event(
         self,

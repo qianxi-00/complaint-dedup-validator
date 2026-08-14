@@ -12,8 +12,8 @@
     <div class="event-filter-actions"><button type="submit">筛选</button><a class="button secondary" href="/events">重置</a></div>
   </form>
   <p class="muted">共 {{ total }} 个事件，每页 10 个。</p>
-  <table><thead><tr><th>事件名称</th><th>地区</th><th>街道</th><th>事项</th><th>工单数</th><th>首次受理</th><th>最后受理</th></tr></thead><tbody>
-{% for event in events %}<tr><td><a class="event-link" href="/events/{{ event.id }}">{{ event.event_name }}</a></td><td>{{ event.region or '-' }}</td><td>{{ event.street_name }}</td><td>{{ event.issue_name }}</td><td>{{ event.member_count }}</td><td>{{ event.first_received_at or '-' }}</td><td>{{ event.last_received_at or '-' }}</td></tr>{% else %}<tr><td colspan="7" class="muted">没有符合筛选条件的事件</td></tr>{% endfor %}
+  <table class="event-list-table"><thead><tr><th>事件名称</th><th>地区</th><th>街道</th><th>事项</th><th>工单数</th><th>首次受理</th><th>最后受理</th></tr></thead><tbody>
+{% for event in events %}<tr><td data-label="事件名称"><a class="event-link" href="/events/{{ event.id }}">{{ event.event_name }}</a></td><td data-label="地区">{{ event.region or '-' }}</td><td data-label="街道">{{ event.street_name }}</td><td data-label="事项">{{ event.issue_name }}</td><td data-label="工单数">{{ event.member_count }}</td><td data-label="首次受理">{{ event.first_received_at or '-' }}</td><td data-label="最后受理">{{ event.last_received_at or '-' }}</td></tr>{% else %}<tr class="event-list-empty"><td colspan="7" class="muted">没有符合筛选条件的事件</td></tr>{% endfor %}
   </tbody></table>
   <div class="pagination">
     {% if page > 1 %}<a class="button secondary" href="/events?region={{ filters.region }}&street={{ filters.street }}&issue={{ filters.issue }}&event_name={{ filters.event_name }}&page={{ page - 1 }}">上一页</a>{% endif %}

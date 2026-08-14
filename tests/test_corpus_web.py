@@ -162,6 +162,7 @@ def test_bootstrap_upload_review_approve_and_event_page(tmp_path: Path):
         wait_for_text(client, batch_url, "批次已完成")
         events = client.get("/events")
         assert "德昌电机门口" in events.text
+        assert 'data-label="事件名称"' in events.text
         assert '<option value="江海区"' in events.text
         assert '<option value="礼乐街道"' in events.text
         assert '<option value="道路积水"' in events.text
@@ -177,6 +178,8 @@ def test_bootstrap_upload_review_approve_and_event_page(tmp_path: Path):
         assert "所属部门" in detail.text
         assert "数据来源" in detail.text
         assert "成员置信度" not in detail.text
+        assert 'data-label="受理时间"' in detail.text
+        assert 'data-label="操作"' in detail.text
 
         renamed = client.post(
             "/events/1/name",

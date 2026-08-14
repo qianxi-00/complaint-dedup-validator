@@ -65,9 +65,13 @@ def anchor_location_signature(
     house_no: str | None,
     building: str | None,
     direction: str | None,
+    shop_no: str | None = None,
+    floor: str | None = None,
 ) -> str:
     return "|".join(
-        _normalize(value) for value in (road, house_no, building, direction) if value
+        _normalize(value)
+        for value in (road, house_no, building, shop_no, floor, direction)
+        if value
     )
 
 
@@ -81,6 +85,8 @@ def canonicalize_anchor_candidates(
             item.get("house_no"),
             item.get("building"),
             item.get("direction"),
+            item.get("shop_no"),
+            item.get("floor"),
         )
         groups[(item["street_key"], item["anchor_type"], signature)].append(item)
 

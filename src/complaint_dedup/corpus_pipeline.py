@@ -160,10 +160,14 @@ class CorpusProcessor:
                                 item["parsed"].house_no,
                                 item["parsed"].building,
                                 item["parsed"].direction,
+                                item["parsed"].shop_no,
+                                item["parsed"].floor,
                             ),
                             "road": item["parsed"].road,
                             "house_no": item["parsed"].house_no,
                             "building": item["parsed"].building,
+                            "shop_no": item["parsed"].shop_no,
+                            "floor": item["parsed"].floor,
                             "direction": item["parsed"].direction,
                         }
                         for item in parsed_rows
@@ -196,7 +200,12 @@ class CorpusProcessor:
             anchor_status = "unknown"
             anchor_id = None
             location_signature = anchor_location_signature(
-                parsed.road, parsed.house_no, parsed.building, parsed.direction
+                parsed.road,
+                parsed.house_no,
+                parsed.building,
+                parsed.direction,
+                parsed.shop_no,
+                parsed.floor,
             )
             if street_id and parsed.anchor_raw:
                 anchor_id = dictionary_maps["anchors"].get(
@@ -276,6 +285,10 @@ class CorpusProcessor:
                     "road": parsed.road,
                     "house_no": parsed.house_no,
                     "building": parsed.building,
+                    "unit": parsed.unit,
+                    "room": parsed.room,
+                    "shop_no": parsed.shop_no,
+                    "floor": parsed.floor,
                     "direction": parsed.direction,
                     "anchor_raw": parsed.anchor_raw,
                     "anchor_type": parsed.anchor_type,
@@ -348,6 +361,7 @@ class CorpusProcessor:
         records = await self.repository.records_for_batch(batch_id)
         await self._assign_exact_events(batch_id, frozen=True)
         await self.repository.assign_linked_records(batch_id)
+        await self.repository.assign_strong_signal_records(batch_id)
         await self._assign_safe_singletons(records)
         await self.repository.commit_batch(batch_id)
 
@@ -358,6 +372,7 @@ class CorpusProcessor:
         records = await self.repository.records_for_batch(batch_id)
         await self._assign_exact_events(batch_id, frozen=True)
         await self.repository.assign_linked_records(batch_id)
+        await self.repository.assign_strong_signal_records(batch_id)
         await self._assign_safe_singletons(records)
         await self.repository.commit_batch(batch_id)
 
@@ -434,6 +449,8 @@ class CorpusProcessor:
                     road=row.get("road"),
                     house_no=row.get("house_no"),
                     building=row.get("building"),
+                    shop_no=row.get("shop_no"),
+                    floor=row.get("floor"),
                     direction=row.get("direction"),
                 )
             issue_name = row.get("final_category") or "未识别事项"
@@ -519,6 +536,10 @@ def _event_name(row: dict[str, Any]) -> str:
         for value in location_parts
         if value and str(value).strip()
     )
+    if row.get("shop_no"):
+        location += f"商铺{str(row['shop_no']).strip()}"
+    if row.get("floor"):
+        location += str(row["floor"]).strip()
     anchor = str(row.get("anchor_raw") or "").strip()
     if location and location not in anchor:
         anchor = f"{location}{anchor}"

@@ -68,3 +68,21 @@ def test_issue_segments_extract_multiple_independent_items():
         "地下车库乱停车。",
         "路灯不亮。",
     ]
+
+
+def test_parse_keeps_structured_address_components():
+    result = parse_complaint(
+        title="明泰城商铺投诉",
+        appeal=(
+            "地址：江海区江南街道金瓯路188号26幢2单元301室，商铺A-12，3楼。\n"
+            "事项：物业收费纠纷。"
+        ),
+        location=None,
+    )
+    assert result.road == "金瓯路"
+    assert result.house_no == "188号"
+    assert result.building == "26幢"
+    assert result.unit == "2单元"
+    assert result.room == "301室"
+    assert result.shop_no == "A-12"
+    assert result.floor == "3楼"
