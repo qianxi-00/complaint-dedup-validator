@@ -4,10 +4,13 @@ import asyncio
 import hashlib
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -16,15 +19,31 @@ from complaint_dedup.config import Settings
 from complaint_dedup.corpus_database import corpus_database_url
 from complaint_dedup.corpus_exporter import export_corpus
 from complaint_dedup.corpus_pipeline import CorpusProcessor
-from complaint_dedup.corpus_repository import CorpusRepository
+from complaint_dedup.corpus_repository import CorpusRepository, EventFilters
 from complaint_dedup.corpus_worker import CorpusBatchWorker
-from complaint_dedup.dictionary_seed_exporter import export_dictionary_seed
-from complaint_dedup.ui_labels import label, stage_label
+from complaint_dedup.llm_client import build_llm_client
+from complaint_dedup.ui_labels import format_datetime, label, stage_label
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = Jinja2Templates(directory=PROJECT_ROOT / "templates")
 TEMPLATES.env.globals.update(label=label, stage_label=stage_label)
+TEMPLATES.env.filters["urlencode"] = lambda value: urlencode(value, doseq=True)
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD") from exc
+
+def _parse_checkbox(value: str | None) -> bool:
+    """Accept missing, empty, and standard HTML checkbox values."""
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def create_corpus_app(
@@ -39,9 +58,29 @@ def create_corpus_app(
         max_overflow=settings.db_max_overflow,
     )
     repository = CorpusRepository(database)
+    start_embedded_worker = (
+        settings.database_mode == "sqlite"
+        if embedded_worker is None
+        else embedded_worker
+    )
+    normalization_llm = (
+        build_llm_client(
+            settings,
+            model=settings.llm_judgement_model or settings.llm_model,
+            concurrency=settings.normalization_llm_concurrency,
+        )
+        if start_embedded_worker
+        and settings.normalization_llm_enabled
+        and settings.llm_model
+        else None
+    )
     processor = CorpusProcessor(
         repository,
         dictionary_review_required=settings.dictionary_review_required,
+        normalization_llm_client=normalization_llm,
+        normalization_llm_enabled=settings.normalization_llm_enabled,
+        normalization_llm_min_confidence=settings.normalization_llm_min_confidence,
+        normalization_llm_batch_size=settings.normalization_llm_batch_size,
     )
     runtime_dir = settings.database_path.parent
     upload_dir = runtime_dir / "corpus_uploads"
@@ -49,11 +88,6 @@ def create_corpus_app(
     upload_dir.mkdir(parents=True, exist_ok=True)
     result_dir.mkdir(parents=True, exist_ok=True)
     worker = CorpusBatchWorker(repository, processor, settings)
-    start_embedded_worker = (
-        settings.database_mode == "sqlite"
-        if embedded_worker is None
-        else embedded_worker
-    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -65,9 +99,14 @@ def create_corpus_app(
         finally:
             if start_embedded_worker:
                 await worker.stop()
+            if normalization_llm is not None:
+                await normalization_llm.aclose()
             await database.close()
 
     app = FastAPI(title="投诉事件归一化工作台", lifespan=lifespan)
+    TEMPLATES.env.filters["localtime"] = lambda value: format_datetime(
+        value, settings.app_timezone
+    )
     app.state.database = database
     app.state.repository = repository
     app.state.processor = processor
@@ -81,18 +120,29 @@ def create_corpus_app(
             request,
             "corpus_index.html",
             {
-                "batches": await repository.list_batches(),
-                "dictionary": await repository.active_dictionary_version(),
-                "events": await repository.list_events(),
+                "batches": await repository.list_batches(limit=10),
+                "batch_count": await repository.count_batches(),
+                "event_count": await repository.count_events(),
             },
         )
 
     @app.get("/batches", response_class=HTMLResponse)
-    async def batch_history(request: Request):
+    async def batch_history(request: Request, page: int = 1):
+        page = max(page, 1)
+        page_size = 10
+        total = await repository.count_batches()
+        page_count = max(1, (total + page_size - 1) // page_size)
+        page = min(page, page_count)
         return TEMPLATES.TemplateResponse(
             request,
             "corpus_batches.html",
-            {"batches": await repository.list_batches()},
+            {
+                "batches": await repository.list_batches(
+                    limit=page_size, offset=(page - 1) * page_size
+                ),
+                "page": page,
+                "page_count": page_count,
+            },
         )
 
     @app.post("/batches")
@@ -106,12 +156,11 @@ def create_corpus_app(
             "bootstrap_history",
             "bootstrap_compare",
             "daily_increment",
-            "correction",
         }:
             raise HTTPException(400, "批次类型无效")
         if mode in {"bootstrap_history", "bootstrap_compare"} and file_history is None:
             raise HTTPException(400, "历史冷启动必须上传历史文件 B")
-        if mode in {"daily_increment", "correction", "bootstrap_compare"} and file_daily is None:
+        if mode in {"daily_increment", "bootstrap_compare"} and file_daily is None:
             raise HTTPException(400, "该模式必须上传当天文件 A")
 
         input_files: dict[str, dict[str, str]] = {}
@@ -122,7 +171,7 @@ def create_corpus_app(
                 "file_hash": history_hash,
                 "file_name": file_history.filename or history_path.name,
             }
-        if mode in {"bootstrap_compare", "daily_increment", "correction"}:
+        if mode in {"bootstrap_compare", "daily_increment"}:
             daily_path, daily_hash = await _save_upload(file_daily, upload_dir)
             input_files["daily"] = {
                 "path": str(daily_path),
@@ -133,7 +182,6 @@ def create_corpus_app(
             "bootstrap_history": "历史库冷启动",
             "bootstrap_compare": "首次联合比对",
             "daily_increment": "每日新增",
-            "correction": "补录或更正",
         }[mode]
         batch_id = await repository.create_batch(
             batch_name, mode, input_files=input_files
@@ -146,20 +194,24 @@ def create_corpus_app(
             batch = await repository.get_batch(batch_id)
         except KeyError as exc:
             raise HTTPException(404, "批次不存在") from exc
-        version = None
-        if batch.get("dictionary_version_id"):
-            version = await repository.get_dictionary_version(
-                int(batch["dictionary_version_id"])
-            )
         return TEMPLATES.TemplateResponse(
             request,
             "corpus_batch.html",
             {
                 "batch": batch,
-                "dictionary": version,
-                "records": await repository.records_for_batch(batch_id),
+                "records": await repository.records_for_batch(
+                    batch_id, limit=10
+                ),
             },
         )
+
+    @app.get("/batches/{batch_id}/data")
+    async def batch_data(batch_id: str):
+        try:
+            batch = await repository.get_batch(batch_id)
+        except KeyError as exc:
+            raise HTTPException(404, "批次不存在") from exc
+        return JSONResponse(jsonable_encoder(batch))
 
     @app.get("/batches/{batch_id}/status", response_class=HTMLResponse)
     async def batch_status(request: Request, batch_id: str):
@@ -167,166 +219,10 @@ def create_corpus_app(
             batch = await repository.get_batch(batch_id)
         except KeyError as exc:
             raise HTTPException(404, "批次不存在") from exc
-        version = None
-        if batch.get("dictionary_version_id"):
-            version = await repository.get_dictionary_version(
-                int(batch["dictionary_version_id"])
-            )
         return TEMPLATES.TemplateResponse(
             request,
             "partials/corpus_batch_progress.html",
-            {"batch": batch, "dictionary": version},
-        )
-
-    @app.get("/batches/{batch_id}/dictionary", response_class=HTMLResponse)
-    async def dictionary_review(
-        request: Request,
-        batch_id: str,
-        dimension: str = "anchor",
-        status: str = "",
-        page: int = 1,
-    ):
-        if dimension not in {"street", "anchor", "issue"}:
-            raise HTTPException(400, "词典维度无效")
-        batch = await repository.get_batch(batch_id)
-        version_id = batch.get("dictionary_version_id")
-        if version_id is None:
-            raise HTTPException(404, "该批次没有候选词典")
-        page = max(page, 1)
-        page_size = 20
-        items, total = await repository.list_dictionary_items(
-            int(version_id),
-            dimension=dimension,
-            status=status,
-            limit=page_size,
-            offset=(page - 1) * page_size,
-        )
-        return TEMPLATES.TemplateResponse(
-            request,
-            "corpus_dictionary.html",
-            {
-                "batch": batch,
-                "dictionary": await repository.get_dictionary_version(int(version_id)),
-                "items": items,
-                "summary": await repository.dictionary_review_summary(int(version_id)),
-                "dimension": dimension,
-                "status": status,
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-            },
-        )
-
-    @app.post(
-        "/batches/{batch_id}/dictionary/{dimension}/{item_id}/{action}"
-    )
-    async def review_dictionary_item(
-        batch_id: str,
-        dimension: str,
-        item_id: int,
-        action: str,
-        name: str = Form(""),
-        target_id: int = Form(0),
-        alias_ids: list[int] = Form(default=[]),
-    ):
-        batch = await repository.get_batch(batch_id)
-        version_id = batch.get("dictionary_version_id")
-        if version_id is None:
-            raise HTTPException(404, "该批次没有候选词典")
-        try:
-            if action == "merge":
-                await repository.merge_dictionary_item(
-                    int(version_id),
-                    dimension=dimension,
-                    item_id=item_id,
-                    target_id=target_id,
-                    reviewed_by="本机管理员",
-                )
-            elif action == "split":
-                await repository.split_dictionary_item(
-                    int(version_id),
-                    dimension=dimension,
-                    item_id=item_id,
-                    new_name=name,
-                    alias_ids=alias_ids,
-                    reviewed_by="本机管理员",
-                )
-            else:
-                await repository.review_dictionary_item(
-                    int(version_id),
-                    dimension=dimension,
-                    item_id=item_id,
-                    action=action,
-                    name=name,
-                    reviewed_by="本机管理员",
-                )
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return RedirectResponse(
-            f"/batches/{batch_id}/dictionary?dimension={dimension}", status_code=303
-        )
-
-    @app.get(
-        "/batches/{batch_id}/dictionary/{dimension}/{item_id}",
-        response_class=HTMLResponse,
-    )
-    async def dictionary_item_detail(
-        request: Request, batch_id: str, dimension: str, item_id: int
-    ):
-        batch = await repository.get_batch(batch_id)
-        version_id = batch.get("dictionary_version_id")
-        if version_id is None:
-            raise HTTPException(404, "该批次没有候选词典")
-        try:
-            detail = await repository.get_dictionary_item(
-                int(version_id), dimension=dimension, item_id=item_id
-            )
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(404, str(exc)) from exc
-        options, _ = await repository.list_dictionary_items(
-            int(version_id), dimension=dimension, limit=200, offset=0
-        )
-        return TEMPLATES.TemplateResponse(
-            request,
-            "corpus_dictionary_item.html",
-            {
-                "batch": batch,
-                "dimension": dimension,
-                "detail": detail,
-                "target_options": [row for row in options if row["id"] != item_id],
-            },
-        )
-
-    @app.post("/batches/{batch_id}/dictionary/bulk-approve")
-    async def bulk_approve_dictionary(
-        batch_id: str,
-        min_evidence: int = Form(2),
-    ):
-        batch = await repository.get_batch(batch_id)
-        version_id = batch.get("dictionary_version_id")
-        if version_id is None:
-            raise HTTPException(404, "该批次没有候选词典")
-        await repository.bulk_approve_dictionary_items(
-            int(version_id),
-            min_evidence=min_evidence,
-            reviewed_by="本机管理员",
-        )
-        return RedirectResponse(
-            f"/batches/{batch_id}/dictionary?dimension=anchor", status_code=303
-        )
-
-    @app.get("/batches/{batch_id}/dictionary/export")
-    async def download_dictionary_seed(batch_id: str):
-        batch = await repository.get_batch(batch_id)
-        version_id = batch.get("dictionary_version_id")
-        if version_id is None:
-            raise HTTPException(404, "该批次没有候选词典")
-        output = result_dir / f"词典种子_{batch_id[:8]}.xlsx"
-        await export_dictionary_seed(repository, int(version_id), output)
-        return FileResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename="dictionary_seed_v1.xlsx",
+            {"batch": batch},
         )
 
     @app.post("/batches/{batch_id}/approve")
@@ -350,23 +246,66 @@ def create_corpus_app(
         request: Request,
         region: str = "",
         street: str = "",
-        issue: str = "",
+        processing_department: str = "",
+        completed_from: str | None = None,
+        completed_to: str | None = None,
+        missing_completed: str | None = None,
         event_name: str = "",
+        sort: str = "updated_desc",
+        has_daily: str | None = None,
+        hide_singletons: str | None = None,
         page: int = 1,
     ):
+        has_daily = _parse_checkbox(has_daily)
+        hide_singletons = _parse_checkbox(hide_singletons)
+        missing_completed = _parse_checkbox(missing_completed)
+        filters = EventFilters(
+            region=region,
+            street=street,
+            event_name=event_name,
+            processing_department=processing_department,
+            completed_from=_parse_date(completed_from),
+            completed_to=_parse_date(completed_to),
+            missing_completed=missing_completed,
+            has_daily_records=has_daily,
+            hide_singletons=hide_singletons,
+        )
         page = max(page, 1)
         page_size = 10
         items, total = await repository.list_event_summaries(
-            region=region,
-            street=street,
-            issue=issue,
-            event_name=event_name,
+            filters=filters,
+            sort=sort,
             limit=page_size,
             offset=(page - 1) * page_size,
         )
+        max_page = max(1, (total + page_size - 1) // page_size)
+        if page > max_page:
+            page = max_page
+            items, total = await repository.list_event_summaries(
+                filters=filters,
+                sort=sort,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
         filter_options = await repository.event_filter_options(
             region=region, street=street
         )
+        query = {
+            "region": region,
+            "street": street,
+            "processing_department": processing_department,
+            "completed_from": completed_from or "",
+            "completed_to": completed_to or "",
+            "missing_completed": "1" if missing_completed else "",
+            "event_name": event_name,
+            "sort": sort,
+            "has_daily": "1" if has_daily else "",
+            "hide_singletons": "1" if hide_singletons else "",
+        }
+        # Do not emit empty boolean query parameters. FastAPI rejects values
+        # such as ``has_daily=`` instead of treating them as false.
+        query = {key: value for key, value in query.items() if value != ""}
+        page_count = max(1, (total + page_size - 1) // page_size)
         return TEMPLATES.TemplateResponse(
             request,
             "corpus_events.html",
@@ -375,29 +314,61 @@ def create_corpus_app(
                 "total": total,
                 "page": page,
                 "page_size": page_size,
+                "page_count": page_count,
+                "singleton_count": await repository.count_singleton_events(
+                    filters=filters,
+                ),
+                "filtered_export_url": f"/exports/corpus?{urlencode({**query, 'scope': 'filtered'})}",
+                "previous_url": f"/events?{urlencode({**query, 'page': page - 1})}",
+                "next_url": f"/events?{urlencode({**query, 'page': page + 1})}",
                 "filters": {
                     "region": region,
                     "street": street,
-                    "issue": issue,
+                    "processing_department": processing_department,
+                    "completed_from": completed_from or "",
+                    "completed_to": completed_to or "",
+                    "missing_completed": missing_completed,
                     "event_name": event_name,
+                    "sort": sort,
+                    "has_daily": has_daily,
+                    "hide_singletons": hide_singletons,
                 },
                 "filter_options": filter_options,
             },
         )
 
+    @app.get("/events/options")
+    async def event_options(q: str = "", exclude_event_id: int | None = None):
+        return JSONResponse(
+            await repository.search_event_options(
+                q, exclude_event_id=exclude_event_id
+            )
+        )
+
     @app.get("/events/{event_id}", response_class=HTMLResponse)
-    async def event_detail(request: Request, event_id: int):
+    async def event_detail(request: Request, event_id: int, page: int = 1):
         try:
             event = await repository.get_event(event_id)
         except KeyError as exc:
             raise HTTPException(404, "事件不存在") from exc
+        page = max(page, 1)
+        page_size = 10
+        total = await repository.count_event_records(event_id)
+        page_count = max(1, (total + page_size - 1) // page_size)
+        page = min(page, page_count)
         return TEMPLATES.TemplateResponse(
             request,
             "corpus_event_detail.html",
             {
                 "event": event,
-                "records": await repository.event_records(event_id),
-                "event_options": await repository.list_events(),
+                "records": await repository.event_records(
+                    event_id,
+                    limit=page_size,
+                    offset=(page - 1) * page_size,
+                ),
+                "total": total,
+                "page": page,
+                "page_count": page_count,
             },
         )
 
@@ -429,9 +400,37 @@ def create_corpus_app(
         return RedirectResponse(f"/events/{target_id}", status_code=303)
 
     @app.get("/exports/corpus")
-    async def download_corpus():
-        output = result_dir / "投诉事件归一化结果.xlsx"
-        await export_corpus(repository, output)
+    async def download_corpus(
+        scope: str = "all",
+        region: str = "",
+        street: str = "",
+        processing_department: str = "",
+        completed_from: str | None = None,
+        completed_to: str | None = None,
+        missing_completed: str | None = None,
+        event_name: str = "",
+        has_daily: str | None = None,
+        hide_singletons: str | None = None,
+    ):
+        filters = None
+        if scope == "filtered":
+            filters = EventFilters(
+                region=region,
+                street=street,
+                event_name=event_name,
+                processing_department=processing_department,
+                completed_from=_parse_date(completed_from),
+                completed_to=_parse_date(completed_to),
+                missing_completed=_parse_checkbox(missing_completed),
+                has_daily_records=_parse_checkbox(has_daily),
+                hide_singletons=_parse_checkbox(hide_singletons),
+            )
+        elif scope != "all":
+            raise HTTPException(400, "导出范围无效")
+        output = result_dir / (
+            "投诉事件筛选结果.xlsx" if filters is not None else "投诉事件归一化结果.xlsx"
+        )
+        await export_corpus(repository, output, filters=filters)
         return FileResponse(
             output,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -1,4 +1,6 @@
-from complaint_dedup.ui_labels import label, labels, stage_label
+from datetime import UTC, datetime
+
+from complaint_dedup.ui_labels import format_datetime, label, labels, stage_label
 
 
 def test_label_translates_internal_values_to_chinese() -> None:
@@ -24,3 +26,9 @@ def test_label_translates_detailed_hard_conflicts() -> None:
 def test_label_preserves_unknown_text_and_lists() -> None:
     assert label("自定义说明") == "自定义说明"
     assert labels(["different_transaction", "自定义说明"]) == ["交易不同", "自定义说明"]
+
+
+def test_format_datetime_uses_configured_timezone() -> None:
+    value = datetime(2026, 8, 17, 4, 16, 21, tzinfo=UTC)
+
+    assert format_datetime(value, "Asia/Shanghai") == "2026-08-17 12:16:21"

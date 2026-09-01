@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from complaint_dedup.llm_client import LlmClient, LlmResponseError
-from complaint_dedup.llm_models import ExtractionBatchResponse
+from complaint_dedup.llm_models import NormalizationBatchResponse
 
 
 @pytest.mark.asyncio
@@ -16,7 +16,7 @@ async def test_chat_json_retries_invalid_json_then_returns_valid_payload() -> No
         attempts += 1
         content = "not json"
         if attempts == 3:
-            content = json.dumps({"records": []})
+            content = json.dumps({"decisions": []})
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": content}}]},
@@ -33,10 +33,10 @@ async def test_chat_json_retries_invalid_json_then_returns_valid_payload() -> No
 
     result = await client.chat_json(
         [{"role": "user", "content": "extract"}],
-        ExtractionBatchResponse,
+        NormalizationBatchResponse,
     )
 
-    assert result.records == []
+    assert result.decisions == []
     assert attempts == 3
     await client.aclose()
 
@@ -48,7 +48,7 @@ async def test_chat_json_omits_unsupported_thinking_flag_when_disabled() -> None
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal payload
         payload = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"records":[]}'}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"decisions":[]}'}}]})
 
     client = LlmClient(
         base_url="http://model.local/v1",
@@ -62,7 +62,7 @@ async def test_chat_json_omits_unsupported_thinking_flag_when_disabled() -> None
         transport=httpx.MockTransport(handler),
     )
 
-    await client.chat_json([{"role": "user", "content": "extract"}], ExtractionBatchResponse)
+    await client.chat_json([{"role": "user", "content": "extract"}], NormalizationBatchResponse)
 
     assert payload["max_tokens"] == 2048
     assert "enable_thinking" not in payload
@@ -76,7 +76,7 @@ async def test_chat_json_sends_thinking_flag_when_enabled() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal payload
         payload = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"records":[]}'}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"decisions":[]}'}}]})
 
     client = LlmClient(
         base_url="http://model.local/v1",
@@ -88,7 +88,7 @@ async def test_chat_json_sends_thinking_flag_when_enabled() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    await client.chat_json([{"role": "user", "content": "extract"}], ExtractionBatchResponse)
+    await client.chat_json([{"role": "user", "content": "extract"}], NormalizationBatchResponse)
 
     assert payload["enable_thinking"] is True
     await client.aclose()
@@ -114,7 +114,7 @@ async def test_chat_json_raises_after_retry_budget_is_exhausted() -> None:
     with pytest.raises(LlmResponseError) as error:
         await client.chat_json(
             [{"role": "user", "content": "extract"}],
-            ExtractionBatchResponse,
+            NormalizationBatchResponse,
         )
     assert error.value.raw_response == "invalid"
     await client.aclose()

@@ -110,6 +110,28 @@ class LlmClient:
         await self._client.aclose()
 
 
+def build_llm_client(
+    settings: Any,
+    *,
+    model: str | None = None,
+    concurrency: int | None = None,
+) -> LlmClient:
+    return LlmClient(
+        base_url=str(settings.llm_base_url),
+        api_key=settings.llm_api_key,
+        model=model or settings.llm_model,
+        timeout_seconds=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        enable_thinking=settings.llm_enable_thinking,
+        send_enable_thinking=settings.llm_send_enable_thinking,
+        concurrency=concurrency or settings.llm_concurrency,
+        max_connections=settings.http_max_connections,
+        max_keepalive_connections=settings.http_max_keepalive_connections,
+    )
+
+
 def _strip_code_fence(content: Any) -> str:
     text = str(content).strip()
     match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)

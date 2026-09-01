@@ -2,14 +2,14 @@
 {% block title %}批次详情{% endblock %}
 {% block nav %}<nav><a href="/">批次导入</a><a href="/batches">批次历史</a><a href="/events">事件库</a></nav>{% endblock %}
 {% block content %}
-<section class="page-heading"><div><h1>{{ batch.name }}</h1><p>{{ label(batch.batch_type) }} · 最近操作 {{ batch.updated_at }}</p></div></section>
+<section class="page-heading"><div><h1>{{ batch.name }}</h1><p>{{ label(batch.batch_type) }} · 最近操作 {{ batch.updated_at|localtime }}</p></div></section>
 <section class="stats corpus-stats">
   <div><span>工单数</span><strong>{{ batch.total_records }}</strong></div>
-  <div><span>状态</span><strong class="small-stat">{{ label(batch.status) }}</strong></div>
-  <div><span>阶段</span><strong class="small-stat">{{ stage_label(batch.stage) }}</strong></div>
+  <div><span>挂入已有事件</span><strong>{{ batch.matched_records }}</strong></div>
+  <div><span>新增事件</span><strong>{{ batch.new_events }}</strong></div>
 </section>
 {% include "partials/corpus_batch_progress.html" %}
-<section class="panel"><div class="panel-heading"><div><h2>工单预览</h2><p>仅显示前 10 条，完整数据将在事件详情和导出中保留。</p></div></div><table><thead><tr><th>工单编号</th><th>受理时间</th><th>街道</th><th>地点/主体</th><th>核心问题</th><th>解析状态</th></tr></thead><tbody>
-{% for row in records[:10] %}<tr><td>{{ row.work_order_id or '-' }}</td><td>{{ row.received_at or '-' }}</td><td>{{ row.street_raw or '待识别' }}</td><td>{{ row.anchor_raw or '待识别' }}</td><td>{{ row.final_category or '待识别' }}</td><td>{{ label(row.anchor_resolution_status) }} / {{ label(row.issue_resolution_status) }}</td></tr>{% endfor %}
+<section class="panel"><div class="panel-heading"><div><h2>工单预览</h2><p>仅显示前 10 条，完整数据将在事件详情和导出中保留。</p></div></div><table class="batch-preview-table"><thead><tr><th>工单编号</th><th>受理时间</th><th>街道</th><th>地点/主体</th><th>核心问题</th><th>解析状态</th></tr></thead><tbody>
+{% for row in records %}<tr><td data-label="工单编号">{{ row.work_order_id or '-' }}</td><td data-label="受理时间">{{ row.received_at|localtime }}</td><td data-label="街道">{{ row.street_raw or '待识别' }}</td><td data-label="地点/主体">{{ row.anchor_raw or '待识别' }}</td><td data-label="核心问题">{{ row.final_category or '待识别' }}</td><td data-label="解析状态">{{ label(row.anchor_resolution_status) }} / {{ label(row.issue_resolution_status) }}</td></tr>{% endfor %}
 </tbody></table></section>
 {% endblock %}

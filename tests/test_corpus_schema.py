@@ -5,6 +5,7 @@ from complaint_dedup import corpus_schema  # noqa: F401
 def test_corpus_schema_registers_all_long_lived_tables():
     expected = {
         "corpus_sources",
+        "corpus_generations",
         "corpus_records",
         "daily_batches",
         "batch_records",
@@ -51,6 +52,9 @@ def test_corpus_record_keeps_resolution_and_source_fields():
         "dictionary_version_id",
         "parser_version",
         "raw_json",
+        "generation_id",
+        "occurrence_key",
+        "occurrence_identifiers",
     }
     assert expected <= set(table.c.keys())
 
@@ -62,12 +66,20 @@ def test_event_key_is_unique_within_key_version():
         for constraint in table.constraints
         if constraint.__class__.__name__ == "UniqueConstraint"
     }
-    assert ("street_id", "anchor_id", "issue_id", "event_key_version") in unique_columns
+    assert (
+        "generation_id",
+        "street_id",
+        "anchor_id",
+        "issue_id",
+        "occurrence_key",
+        "event_key_version",
+    ) in unique_columns
 
 
-def test_anchor_identity_includes_location_signature():
+def test_anchor_identity_uses_bounded_hash_key():
     table = metadata.tables["canonical_anchors"]
     assert "location_signature" in table.c
+    assert "anchor_key_hash" in table.c
     unique_columns = {
         tuple(constraint.columns.keys())
         for constraint in table.constraints
@@ -75,8 +87,18 @@ def test_anchor_identity_includes_location_signature():
     }
     assert (
         "street_id",
-        "canonical_name",
-        "anchor_type",
-        "location_signature",
+        "anchor_key_hash",
         "dictionary_version_id",
     ) in unique_columns
+
+
+def test_anchor_alias_identity_uses_bounded_hash_key():
+    table = metadata.tables["anchor_aliases"]
+    assert "alias_key_hash" in table.c
+    unique_columns = {
+        tuple(constraint.columns.keys())
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("anchor_id", "alias_key_hash") in unique_columns
+    assert ("anchor_id", "alias") not in unique_columns

@@ -1,22 +1,99 @@
 from __future__ import annotations
 
 import re
+from unicodedata import normalize as unicode_normalize
 from dataclasses import dataclass, field
 
 
-_STREET_RE = re.compile(r"(?P<street>[\u4e00-\u9fff]{2,12}(?:街道|镇|乡))")
-_REGION_RE = re.compile(r"(?P<region>[\u4e00-\u9fff]{2,8}(?:区|县|市))")
+_STREET_RE = re.compile(r"(?P<street>[\u4e00-\u9fff]{1,6}?(?:街道|镇))")
+_KNOWN_REGIONS = (
+    "江海区",
+    "蓬江区",
+    "新会区",
+    "台山市",
+    "开平市",
+    "恩平市",
+    "鹤山市",
+    "中山市",
+    "东莞市",
+    "深圳市",
+    "广州市",
+    "江门市",
+)
+_REGION_ALIASES = {
+    "江门市高新区": "江海区",
+    "高新区": "江海区",
+}
+_JIANGHAI_STREET_ALIASES = {
+    "礼乐街道": (
+        "礼乐街道",
+        "礼乐镇",
+        "礼街道",
+        "海区礼乐街道",
+        "江海礼乐街道",
+    ),
+    "外海街道": (
+        "外海街道",
+        "外海镇",
+        "外街道",
+        "海区外海街道",
+        "江海外海街道",
+    ),
+    "江南街道": (
+        "江南街道",
+        "南江街道",
+        "江海街道",
+        "江海江南街道",
+        "江海区江南街道",
+    ),
+}
+_STREET_ALIASES = {
+    "圭峰会城会城街道": "会城街道",
+}
 _ROAD_HOUSE_RE = re.compile(
     r"(?P<road>[\u4e00-\u9fffA-Za-z0-9·]{1,24}(?:路|街|道|巷|大道))"
     r"\s*(?P<house_no>\d+(?:号|號)?)"
 )
-_BUILDING_RE = re.compile(r"(?P<building>\d{1,4}(?:幢|栋|棟|座))")
+_CN_NUMBER = "零〇一二两三四五六七八九十百"
+_BUILDING_RE = re.compile(
+    rf"(?P<building>[0-9{_CN_NUMBER}]{{1,4}}(?:号?厂房|幢|栋|棟|座))"
+)
 _UNIT_RE = re.compile(r"(?P<unit>\d{1,3}(?:单元|单元楼))")
 _ROOM_RE = re.compile(r"(?P<room>\d{1,4}(?:室|房))")
 _SHOP_RE = re.compile(
     r"(?:商铺|店铺|铺位)\s*(?P<shop_no>[A-Za-z0-9\u4e00-\u9fff-]+)"
 )
-_FLOOR_RE = re.compile(r"(?P<floor>\d{1,3}(?:层|楼))")
+_FLOOR_RE = re.compile(
+    rf"(?P<floor>[0-9{_CN_NUMBER}]{{1,3}}(?:层|楼)|\d{{1,3}}F)", re.I
+)
+_DIRECTION_WORDS = (
+)
+_ORGANIZATION_SUFFIXES = (
+    "股份有限公司",
+    "有限责任公司",
+    "有限公司",
+    "集团公司",
+    "食品厂",
+    "幼儿园",
+    "加油站",
+    "工厂",
+    "学校",
+    "大学",
+    "学院",
+    "医院",
+    "超市",
+    "商场",
+    "酒店",
+    "宾馆",
+    "餐厅",
+    "药店",
+)
+_ORGANIZATION_RE = re.compile(
+    rf"[^\s，。；：、\n\r]{{2,50}}(?:{'|'.join(_ORGANIZATION_SUFFIXES)})"
+)
+_ORG_ADDRESS_PREFIX_RE = re.compile(
+    r"^.*?(?:街道|镇).*?(?:路|大道|街|巷)(?:\d+(?:号|幢|栋|座))?"
+)
 _DIRECTION_WORDS = (
     "门口",
     "门前",
@@ -47,6 +124,24 @@ _WORK_ORDER_CONTEXT_RE = re.compile(
     r"(?:工单|单号|编号|此前|之前|历史|重复)[^\dA-Za-z]{0,8}"
     r"(?P<id>\d{16,24}(?:[A-Za-z]{1,4})?)"
 )
+_OCCURRENCE_PATTERNS = (
+    (
+        "order",
+        re.compile(
+            r"(?:订单(?:号|编号|号码)?|交易(?:单号|号|编号)|支付(?:订单)?号)"
+            r"\s*[:：]?\s*(?P<id>[0-9A-Za-z][0-9A-Za-z-]{5,31})",
+            re.I,
+        ),
+    ),
+    (
+        "complaint",
+        re.compile(
+            r"(?:投诉(?:工单|单)?号|平台(?:投诉)?单号|工单号)"
+            r"\s*[:：]?\s*(?P<id>[0-9A-Za-z][0-9A-Za-z-]{5,31})",
+            re.I,
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -76,8 +171,10 @@ class ComplaintParseResult:
     parse_source: str | None = None
     parse_confidence: float = 0.0
     normalized_title: str = ""
+    organization_subject: str | None = None
     previous_work_order_ids: list[str] = field(default_factory=list)
     issue_segments: list[IssueSegment] = field(default_factory=list)
+
 
 
 def clean_title(value: str | None) -> str:
@@ -111,6 +208,21 @@ def extract_previous_work_order_ids(text: str | None) -> list[str]:
     return result
 
 
+def extract_occurrence_identifiers(text: str | None) -> list[str]:
+    if not text:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for kind, pattern in _OCCURRENCE_PATTERNS:
+        for match in pattern.finditer(text):
+            identifier = re.sub(r"[^0-9A-Za-z]", "", match.group("id")).upper()
+            value = f"{kind}:{identifier}"
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+    return result
+
+
 def split_issue_segments(text: str | None) -> list[IssueSegment]:
     value = _clean_text(text)
     matches = list(
@@ -134,8 +246,25 @@ def split_issue_segments(text: str | None) -> list[IssueSegment]:
                 )
             )
     return segments
+def normalize_organization_name(value: str | None) -> str:
 
 
+    text = unicode_normalize("NFKC", str(value or "")).casefold()
+    return re.sub(r"\s+", "", text)
+
+
+def extract_organization_subject(*texts: str | None) -> str | None:
+    for text in texts:
+        for match in _ORGANIZATION_RE.finditer(str(text or "")):
+            candidate = match.group(0)
+            address_match = re.search(
+                r".*?(?:街道|镇).*?(?:路|大道|街|巷)(?:\d+(?:号|幢|栋|座))?", candidate
+            )
+            if address_match:
+                candidate = candidate[address_match.end() :]
+            if len(candidate) >= 4 and not re.fullmatch(r"(?:某|该|此|相关)公司", candidate):
+                return candidate
+    return None
 def parse_complaint(
     *, title: str | None, appeal: str | None, location: str | None
 ) -> ComplaintParseResult:
@@ -155,7 +284,7 @@ def parse_complaint(
         house_no = road_match.group("house_no")
     building_match = _BUILDING_RE.search(scoped_address)
     if building_match:
-        building = building_match.group("building")
+        building = _normalize_numbered_component(building_match.group("building"))
     unit_match = _UNIT_RE.search(scoped_address)
     unit = unit_match.group("unit") if unit_match else None
     room_match = _ROOM_RE.search(scoped_address)
@@ -163,7 +292,11 @@ def parse_complaint(
     shop_match = _SHOP_RE.search(scoped_address)
     shop_no = shop_match.group("shop_no") if shop_match else None
     floor_match = _FLOOR_RE.search(scoped_address)
-    floor = floor_match.group("floor") if floor_match else None
+    floor = (
+        _normalize_numbered_component(floor_match.group("floor"))
+        if floor_match
+        else None
+    )
 
     anchor = scoped_address
     for match in (road_match, building_match, unit_match, room_match, shop_match, floor_match):
@@ -172,7 +305,8 @@ def parse_complaint(
     anchor = re.sub(r"^[\s,，。:：-]+|[\s,，。:：-]+$", "", anchor)
     anchor = re.sub(r"^(?:地址|事发地点)\s*[:：]?", "", anchor).strip()
 
-    direction = next((word for word in _DIRECTION_WORDS if anchor.endswith(word)), None)
+    direction = next((word for word in _DIRECTION_WORDS if word in anchor), None)
+    organization_subject = extract_organization_subject(title, appeal, address_line)
     anchor_type = "landmark" if direction else ("subject" if anchor else "unknown")
     if not anchor:
         anchor = None
@@ -195,6 +329,7 @@ def parse_complaint(
         parse_source=source,
         parse_confidence=confidence,
         normalized_title=clean_title(title),
+        organization_subject=organization_subject,
         previous_work_order_ids=extract_previous_work_order_ids(appeal),
         issue_segments=split_issue_segments(appeal),
     )
@@ -205,7 +340,10 @@ def _extract_address_line(
 ) -> tuple[str, str]:
     if appeal:
         normalized = str(appeal).replace("_x000D_", "\n")
-        match = re.search(r"(?:^|\n)\s*地址\s*[:：]\s*([^\n]+)", normalized)
+        match = re.search(
+            r"(?:^|\n)\s*地址(?:[一二三四1-4])?\s*[:：]\s*([^\n]+)",
+            normalized,
+        )
         if match:
             return match.group(1).strip(), "appeal_address"
     if location and str(location).strip():
@@ -216,15 +354,26 @@ def _extract_address_line(
 
 
 def _first_region(value: str) -> str | None:
-    match = _REGION_RE.search(value)
-    return match.group("region") if match else None
+    for region in _KNOWN_REGIONS:
+        if region in value:
+            return region
+    for alias, region in _REGION_ALIASES.items():
+        if alias in value:
+            return region
+    return None
 
 
 def _first_street(value: str) -> str | None:
+    for canonical_name, aliases in _JIANGHAI_STREET_ALIASES.items():
+        if any(alias in value for alias in aliases):
+            return canonical_name
     scoped = value
     region = _first_region(value)
     if region:
-        scoped = value.replace(region, " ", 1)
+        if region in value:
+            scoped = value.split(region, 1)[1]
+        else:
+            scoped = value
     match = _STREET_RE.search(scoped)
     return match.group("street") if match else None
 
@@ -234,8 +383,53 @@ def _normalize_street(value: str | None) -> str | None:
         return None
     text = re.sub(r"(街道|镇|乡)(?:街道|镇|乡)+", r"\1", value)
     text = text.replace("街道镇", "街道").replace("街道乡", "街道")
-    return text
+    return _STREET_ALIASES.get(text, text)
 
 
 def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\r", "").replace("\n", " ")).strip()
+
+
+def _normalize_numbered_component(value: str) -> str:
+    suffix_match = re.search(r"(?:号?厂房|幢|栋|棟|座|层|楼|F)$", value, re.I)
+    if suffix_match is None:
+        return value
+    number = _chinese_number(value[: suffix_match.start()])
+    if number is None:
+        return value.replace("棟", "栋")
+    suffix = suffix_match.group(0)
+    if suffix.lower() == "f":
+        suffix = "楼"
+    elif suffix == "棟":
+        suffix = "栋"
+    elif suffix.endswith("厂房"):
+        suffix = "号厂房"
+    return f"{number}{suffix}"
+
+
+def _chinese_number(value: str) -> int | None:
+    text = value.lstrip("0") or "0"
+    if text.isdigit():
+        return int(text)
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if text in digits:
+        return digits[text]
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = digits.get(left, 1) if left else 1
+        ones = digits.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return None

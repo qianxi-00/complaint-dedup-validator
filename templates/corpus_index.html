@@ -4,13 +4,11 @@
 {% block content %}
 <section class="page-heading">
   <div><h1>投诉事件归一化</h1><p>历史库冻结后，每日新增只匹配标准街道、地点和核心问题。</p></div>
-  <div class="model-state">词典：{{ dictionary.version if dictionary else "尚未发布" }}</div>
 </section>
 
 <section class="stats corpus-stats">
-  <div><span>历史批次</span><strong>{{ batches|length }}</strong></div>
-  <div><span>正式事件</span><strong>{{ events|length }}</strong></div>
-  <div><span>词典状态</span><strong class="small-stat">{{ dictionary.status if dictionary else "待冷启动" }}</strong></div>
+  <div><span>导入批次</span><strong>{{ batch_count }}</strong></div>
+  <div><span>正式事件</span><strong>{{ event_count }}</strong></div>
 </section>
 
 <section class="panel">
@@ -21,7 +19,6 @@
         <option value="bootstrap_history">历史库冷启动</option>
         <option value="bootstrap_compare">首次 A/B 联合比对</option>
         <option value="daily_increment">每日新增</option>
-        <option value="correction">补录或更正</option>
       </select>
     </label>
     <label>批次名称<input name="name" placeholder="例如：2026-08-14 每日新增"></label>
@@ -35,7 +32,7 @@
 <section class="panel">
   <div class="panel-heading"><div><h2>最近批次</h2><p>显示最近操作时间和当前处理阶段。</p></div><a class="button secondary" href="/batches">查看全部</a></div>
   <table><thead><tr><th>批次</th><th>类型</th><th>阶段</th><th>工单数</th><th>最近操作</th><th></th></tr></thead><tbody>
-  {% for batch in batches[:10] %}<tr><td>{{ batch.name }}</td><td>{{ label(batch.batch_type) }}</td><td>{{ stage_label(batch.stage) }}</td><td>{{ batch.total_records }}</td><td>{{ batch.updated_at }}</td><td><a href="/batches/{{ batch.id }}">查看</a></td></tr>{% endfor %}
+  {% for batch in batches[:10] %}<tr><td>{{ batch.name }}</td><td>{{ label(batch.batch_type) }}</td><td>{{ stage_label(batch.stage) }}</td><td>{{ batch.total_records }}</td><td>{{ batch.updated_at|localtime }}</td><td><a href="/batches/{{ batch.id }}">查看</a></td></tr>{% endfor %}
   </tbody></table>
 </section>
 {% endif %}
@@ -47,7 +44,7 @@
   const syncFiles = () => {
     const value = mode.value;
     historyField.hidden = !["bootstrap_history", "bootstrap_compare"].includes(value);
-    dailyField.hidden = !["bootstrap_compare", "daily_increment", "correction"].includes(value);
+    dailyField.hidden = !["bootstrap_compare", "daily_increment"].includes(value);
     historyField.querySelector("input").required = !historyField.hidden;
     dailyField.querySelector("input").required = !dailyField.hidden;
   };

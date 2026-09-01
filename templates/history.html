@@ -1,5 +1,0 @@
-{% extends "base.html" %}{% block content %}
-<section class="page-heading"><div><h1>任务历史</h1><p>任务永久保留，直到手工删除。</p></div></section>
-<section class="panel"><table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>总工单</th><th>候选</th><th></th></tr></thead><tbody>
-{% for job in jobs %}<tr><td>{{ job.name or job.id }}</td><td>{{ job.status|zh }}</td><td>{{ job.stage|stage_zh }}</td><td>{{ job.total_records }}</td><td>{{ job.candidate_count }}</td><td><a href="/jobs/{{ job.id }}">查看</a></td></tr>{% else %}<tr><td colspan="6">暂无任务</td></tr>{% endfor %}
-</tbody></table></section>{% endblock %}

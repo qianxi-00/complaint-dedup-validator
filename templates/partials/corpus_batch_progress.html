@@ -1,7 +1,7 @@
 <section
   id="batch-progress"
   class="panel review-banner"
-  {% if batch.status in ['uploaded', 'parsing', 'normalizing', 'approval_requested', 'commit_requested'] %}
+  {% if batch.status in ['uploaded', 'parsing', 'normalizing', 'approval_requested', 'commit_requested', 'awaiting_daily'] %}
   hx-get="/batches/{{ batch.id }}/status"
   hx-trigger="every 2s"
   hx-swap="outerHTML"
@@ -10,17 +10,15 @@
   {% if batch.status in ['uploaded', 'parsing', 'normalizing'] %}
   <div><h2>等待后台处理</h2><p>文件已安全保存，后台正在读取、解析和归一化工单。</p></div>
   {% elif batch.status == 'approval_requested' %}
-  <div><h2>正在建立历史事件库</h2><p>词典已提交发布，后台正在生成冻结事件和完整成员关系。</p></div>
+  <div><h2>正在建立历史事件库</h2><p>后台正在生成标准项、冻结事件和完整成员关系。</p></div>
   {% elif batch.status == 'commit_requested' %}
   <div><h2>正在追加历史库</h2><p>后台正在提交本批次并更新事件成员。</p></div>
+  {% elif batch.status == 'awaiting_daily' %}
+  <div><h2>历史库已完成</h2><p>首次联合比对正在等待当天文件进入增量流程。</p></div>
   {% elif batch.status == 'failed' %}
   <div><h2>处理失败</h2><p>{{ batch.error_message or '未记录具体错误，请检查后台日志。' }}</p></div>
-  {% elif dictionary and dictionary.status == 'candidate' %}
-  <div><h2>待审核词典</h2><p>先审核高频和高风险标准项，未通过项将保守保留为单例。</p></div>
-  <div class="action-row"><a class="button secondary" href="/batches/{{ batch.id }}/dictionary">进入词典审核</a><form method="post" action="/batches/{{ batch.id }}/approve"><button type="submit">发布已审核词典</button></form></div>
-  {% elif batch.batch_type in ['daily_increment', 'correction'] and batch.status == 'reviewing' %}
-  <div><h2>待提交增量</h2><p>确认归一化结果后，再将本批次正式追加到历史库。</p></div>
-  <form method="post" action="/batches/{{ batch.id }}/commit"><button type="submit">提交本批次</button></form>
+  {% elif batch.status == 'reviewing' %}
+  <div><h2>正在整理事件</h2><p>后台正在把工单归入历史事件或创建新事件。</p></div>
   {% else %}
   <div><h2>批次已完成</h2><p>本批次已经写入正式语料库，可以在事件库中查看结果。</p></div>
   {% endif %}

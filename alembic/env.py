@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from complaint_dedup.async_database import metadata
 from complaint_dedup import corpus_schema  # noqa: F401
-from complaint_dedup.async_runtime import database_url
+from complaint_dedup.corpus_database import corpus_database_url
 from complaint_dedup.config import get_settings
 
 
@@ -14,7 +14,9 @@ config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 if not config.attributes.get("preserve_sqlalchemy_url"):
-    config.set_main_option("sqlalchemy.url", database_url(get_settings()).replace("%", "%%"))
+    config.set_main_option(
+        "sqlalchemy.url", corpus_database_url(get_settings()).replace("%", "%%")
+    )
 target_metadata = metadata
 
 

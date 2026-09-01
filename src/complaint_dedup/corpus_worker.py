@@ -65,6 +65,8 @@ class CorpusBatchWorker:
             status = str(batch["status"])
             if status in {"uploaded", "parsing", "normalizing"}:
                 await self._stage_uploaded(batch)
+            elif status == "awaiting_daily":
+                await self._stage_compare_daily(batch)
             elif status == "approval_requested":
                 await self._approve_bootstrap(batch)
             elif status == "commit_requested":
@@ -73,6 +75,12 @@ class CorpusBatchWorker:
             raise
         except Exception as exc:
             await self.repository.mark_batch_failed(batch_id, str(exc))
+            generation = await self.repository.generation_for_batch(batch_id)
+            if generation is not None and generation.get("status") == "building":
+                with suppress(Exception):
+                    await self.repository.fail_generation(
+                        int(generation["id"]), str(exc)
+                    )
         finally:
             heartbeat.cancel()
             with suppress(asyncio.CancelledError):
@@ -105,25 +113,55 @@ class CorpusBatchWorker:
             records=records,
             batch_id=str(batch["id"]),
         )
+        if batch_type in {"bootstrap_history", "bootstrap_compare"}:
+            await self._approve_bootstrap(batch)
+        else:
+            await self.processor.commit_increment(str(batch["id"]))
 
     async def _approve_bootstrap(self, batch: dict[str, Any]) -> None:
-        version_id = batch.get("dictionary_version_id")
+        current = await self.repository.get_batch(str(batch["id"]))
+        version_id = current.get("dictionary_version_id")
         if version_id is None:
             raise ValueError("该批次没有待发布词典")
         await self.processor.approve_bootstrap(
-            str(batch["id"]), int(version_id), approved_by="本机管理员"
+            str(batch["id"]),
+            int(version_id),
+            approved_by="本机管理员",
+            defer_final_commit=batch["batch_type"] == "bootstrap_compare",
         )
-        if batch["batch_type"] != "bootstrap_compare":
+        if current["batch_type"] != "bootstrap_compare":
             return
+        await self._stage_compare_daily(await self.repository.get_batch(str(batch["id"])))
+
+    async def _stage_compare_daily(self, batch: dict[str, Any]) -> None:
+        if batch["batch_type"] != "bootstrap_compare":
+            raise ValueError("只有首次联合比对批次需要处理当天文件")
         input_files = dict(batch.get("input_files") or {})
         daily = dict(input_files.get("daily") or {})
         if not daily:
             return
-        await self.repository.create_batch(
-            f"{batch['name']}-当天新增",
-            "daily_increment",
-            input_files={"daily": daily},
+        path = Path(str(daily.get("path") or ""))
+        if not path.is_file():
+            raise ValueError("首次联合比对的当天文件不存在")
+        records = await asyncio.to_thread(load_records_auto, path, source="A")
+        if len(records) > self.settings.max_total_rows:
+            raise ValueError(
+                f"当天文件共 {len(records)} 行，超过上限 {self.settings.max_total_rows} 行"
+            )
+        active_generation = await self.repository.active_generation()
+        if active_generation is None or active_generation.get("dictionary_version_id") is None:
+            raise ValueError("历史库冷启动未成功，无法继续首次联合比对")
+        await self.processor.stage_records(
+            name=str(batch["name"]),
+            batch_type="bootstrap_compare",
+            file_name=str(daily.get("file_name") or path.name),
+            file_hash=str(daily.get("file_hash") or ""),
+            records=records,
+            batch_id=str(batch["id"]),
+            source_type_override="daily",
+            dictionary_version_id_override=int(active_generation["dictionary_version_id"]),
         )
+        await self.processor.commit_increment(str(batch["id"]))
 
     async def _heartbeat(self, batch_id: str) -> None:
         while True:

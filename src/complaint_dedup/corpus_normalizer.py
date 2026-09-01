@@ -29,6 +29,7 @@ _GENERIC_SUFFIXES = (
     "健身房",
     "健身中心",
 )
+_MAX_PAIRWISE_FUZZY_GROUP_SIZE = 200
 
 
 def fuzzy_alias_match(
@@ -69,7 +70,7 @@ def anchor_location_signature(
     floor: str | None = None,
 ) -> str:
     return "|".join(
-        _normalize(value)
+        _normalize_structural(value)
         for value in (road, house_no, building, shop_no, floor, direction)
         if value
     )
@@ -93,14 +94,22 @@ def canonicalize_anchor_candidates(
     result: list[dict[str, Any]] = []
     for group in groups.values():
         counts = Counter(str(item["canonical_name"]) for item in group)
-        representatives: list[str] = []
-        canonical_names: dict[str, str] = {}
-        for name in sorted(counts, key=lambda value: (-counts[value], len(value), value)):
-            matched = fuzzy_alias_match(name, representatives, threshold=threshold)
-            canonical = matched or name
-            if matched is None:
-                representatives.append(name)
-            canonical_names[name] = canonical
+        ordered_names = sorted(
+            counts, key=lambda value: (-counts[value], len(value), value)
+        )
+        if len(ordered_names) > _MAX_PAIRWISE_FUZZY_GROUP_SIZE:
+            canonical_names = _safe_canonical_names(ordered_names)
+        else:
+            representatives: list[str] = []
+            canonical_names = {}
+            for name in ordered_names:
+                matched = fuzzy_alias_match(
+                    name, representatives, threshold=threshold
+                )
+                canonical = matched or name
+                if matched is None:
+                    representatives.append(name)
+                canonical_names[name] = canonical
         for item in group:
             value = dict(item)
             raw_name = str(item["canonical_name"])
@@ -110,9 +119,46 @@ def canonicalize_anchor_candidates(
     return result
 
 
+def _safe_canonical_names(names: list[str]) -> dict[str, str]:
+    exact_names: dict[str, str] = {}
+    base_names: dict[str, str] = {}
+    canonical_names: dict[str, str] = {}
+    for name in names:
+        normalized = _normalize(name)
+        base = _without_generic_suffix(normalized)
+        canonical = exact_names.get(normalized)
+        if canonical is None and base:
+            canonical = base_names.get(base)
+        if canonical is None:
+            canonical = name
+            if normalized:
+                exact_names[normalized] = canonical
+            if base:
+                base_names.setdefault(base, canonical)
+        canonical_names[name] = canonical
+    return canonical_names
+
+
 def _normalize(value: str | None) -> str:
     text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", str(value or ""))
     return text.replace("號", "号").replace("棟", "栋")
+
+
+def _normalize_structural(value: str | None) -> str:
+    text = _normalize(value)
+    for source, target in {
+        "01号厂房": "1号厂房",
+        "一号厂房": "1号厂房",
+        "二号厂房": "2号厂房",
+        "三号厂房": "3号厂房",
+        "一楼": "1楼",
+        "二楼": "2楼",
+        "三楼": "3楼",
+        "四楼": "4楼",
+        "五楼": "5楼",
+    }.items():
+        text = text.replace(source, target)
+    return text
 
 
 def _without_generic_suffix(value: str) -> str:

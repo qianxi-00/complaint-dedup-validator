@@ -1,8 +1,12 @@
 """Create asynchronous complaint dedup schema."""
 
+import sys
+from pathlib import Path
+
 from alembic import op
 
-from complaint_dedup.async_database import metadata
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from legacy_schema import legacy_metadata  # noqa: E402
 
 
 revision = "20260811_0001"
@@ -12,8 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    metadata.create_all(op.get_bind())
+    legacy_metadata.create_all(op.get_bind())
 
 
 def downgrade() -> None:
-    metadata.drop_all(op.get_bind())
+    legacy_metadata.drop_all(op.get_bind())

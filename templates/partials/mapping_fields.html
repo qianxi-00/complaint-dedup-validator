@@ -1,8 +1,0 @@
-<fieldset><legend>文件 {{ prefix|upper }} · {{ selected.row_count }} 行</legend>
-  <label>工作表<select name="sheet_{{ prefix }}" hx-get="/uploads/{{ session_id }}/mapping/{{ prefix|upper }}" hx-target="#mapping-fields-{{ prefix }}" hx-trigger="change" hx-include="this">
-    {% for sheet in file.sheets %}<option value="{{ sheet.name }}" {% if sheet.name == selected.name %}selected{% endif %}>{{ sheet.name }}</option>{% endfor %}
-  </select></label>
-  {% for key, label in [('work_order_id','工单编号'),('received_at','受理时间'),('title','诉求标题'),('category_level_1','事项分类一级'),('category_level_2','事项分类二级'),('category_level_3','事项分类三级'),('category_level_4','事项分类四级'),('category','最终事项分类'),('appeal_text','市民诉求')] %}
-  <label>{{ label }}<select name="{{ prefix }}_{{ key }}"><option value="">未映射</option>{% for column in selected.columns %}<option value="{{ column }}" {% if selected.suggested_mapping[key] == column %}selected{% endif %}>{{ column }}</option>{% endfor %}</select></label>
-  {% endfor %}
-</fieldset>

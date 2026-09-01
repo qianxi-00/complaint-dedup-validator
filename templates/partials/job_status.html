@@ -1,3 +1,0 @@
-<div id="job-status" hx-get="/jobs/{{ job.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML">
-  <h1>任务 {{ job.id[:10] }}</h1><p>{{ job.status|zh }} · {{ job.stage|stage_zh }}</p>
-</div>

@@ -139,7 +139,9 @@ def _detect_csv_encoding(path: Path) -> str:
 
 
 def _inspect_frame(name: str, frame: pd.DataFrame, preview_rows: int) -> SheetInspection:
-    columns = [str(column).strip() for column in frame.columns]
+    # Preserve source headers verbatim for round-trip exports.  Mapping still
+    # ignores harmless whitespace through _normalize_column.
+    columns = [str(column) for column in frame.columns]
     frame = frame.copy()
     frame.columns = columns
     preview_frame = frame.head(preview_rows).where(pd.notna(frame), None)

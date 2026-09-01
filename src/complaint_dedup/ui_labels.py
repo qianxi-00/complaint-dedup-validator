@@ -1,5 +1,8 @@
 """中文化界面展示标签，内部枚举值保持不变。"""
 
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
 _LABELS = {
     "duplicate": "重复",
     "not_duplicate": "不重复",
@@ -47,21 +50,22 @@ _LABELS = {
     "independent_issue": "存在独立问题",
     "uploaded": "等待后台处理",
     "parsing": "解析工单",
-    "normalizing": "标准化词典",
+    "normalizing": "标准化数据",
     "reviewing": "待人工审核",
-    "approval_requested": "正在发布词典",
+    "approval_requested": "正在建立历史库",
     "commit_requested": "正在追加历史库",
+    "awaiting_daily": "历史库已完成，等待当天数据",
     "committed": "已写入历史库",
     "bootstrap_history": "历史库冷启动",
     "bootstrap_compare": "首次 A/B 联合比对",
     "daily_increment": "每日新增",
-    "correction": "补录或更正",
     "candidate": "待审核",
     "approved": "已通过",
     "uncertain": "存疑",
     "merged": "已合并",
     "exact": "精确命中",
     "fuzzy": "模糊命中",
+    "new_standard": "新增标准项",
     "unknown": "待识别",
     "manual_singleton": "保守单例",
 }
@@ -77,10 +81,11 @@ _STAGE_LABELS = {
     "failed": "执行失败",
     "uploaded": "等待后台处理",
     "parsing": "解析工单",
-    "normalizing": "标准化词典",
+    "normalizing": "标准化数据",
     "reviewing": "待人工审核",
-    "approval_requested": "正在发布词典",
+    "approval_requested": "正在建立历史库",
     "commit_requested": "正在追加历史库",
+    "awaiting_daily": "历史库已完成，等待当天数据",
     "committed": "已写入历史库",
 }
 
@@ -103,3 +108,17 @@ def stage_label(value: str | None) -> str:
     if not value:
         return ""
     return _STAGE_LABELS.get(value, label(value))
+
+
+def format_datetime(value: datetime | str | None, timezone_name: str) -> str:
+    if value is None or value == "":
+        return "-"
+    parsed = value
+    if isinstance(parsed, str):
+        try:
+            parsed = datetime.fromisoformat(parsed.replace("Z", "+00:00"))
+        except ValueError:
+            return parsed
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M:%S")

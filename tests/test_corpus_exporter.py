@@ -7,7 +7,8 @@ from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.corpus_exporter import export_corpus
 from complaint_dedup.corpus_pipeline import CorpusProcessor
 from complaint_dedup.corpus_repository import CorpusRepository
-from complaint_dedup.pipeline import InputRecord
+from complaint_dedup.corpus_models import InputRecord
+from complaint_dedup import corpus_exporter
 
 
 def record(row: int, address: str, title: str) -> InputRecord:
@@ -38,6 +39,21 @@ def unknown_location_record(row: int) -> InputRecord:
     )
 
 
+def test_export_temp_files_use_result_directory(tmp_path: Path, monkeypatch):
+    captured_options = {}
+    real_workbook = corpus_exporter.xlsxwriter.Workbook
+
+    def workbook_with_capture(filename, options):
+        captured_options.update(options)
+        return real_workbook(filename, options)
+
+    monkeypatch.setattr(corpus_exporter.xlsxwriter, "Workbook", workbook_with_capture)
+    output = tmp_path / "result.xlsx"
+    corpus_exporter._write_workbook(output, ["工单编号"], [])
+
+    assert captured_options["tmpdir"] == str(tmp_path)
+
+
 @pytest.mark.asyncio
 async def test_export_uses_two_sheets_original_columns_and_alternating_event_colors(
     tmp_path: Path,
@@ -53,8 +69,8 @@ async def test_export_uses_two_sheets_original_columns_and_alternating_event_col
         file_hash="9" * 64,
         records=[
             record(2, "江海区礼乐街道德昌电机门口", "德昌积水一"),
-            record(3, "江海区礼乐街道德昌电机门口", "德昌积水二"),
-            record(4, "江海区礼乐街道文华豪庭北门", "文华积水一"),
+            record(3, "江海区礼乐街道文华豪庭北门", "文华积水一"),
+            record(4, "江海区礼乐街道德昌电机门口", "德昌积水二"),
             record(5, "江海区礼乐街道文华豪庭北门", "文华积水二"),
             record(6, "江海区礼乐街道中心公园南门", "公园积水"),
         ],
@@ -62,6 +78,13 @@ async def test_export_uses_two_sheets_original_columns_and_alternating_event_col
     await processor.approve_bootstrap(
         staged.batch_id, staged.dictionary_version_id, approved_by="tester"
     )
+    duplicate_events = [
+        event
+        for event in await repository.list_events()
+        if len(await repository.event_member_ids(event["id"])) == 2
+    ]
+    for event in duplicate_events:
+        await repository.rename_event(event["id"], "礼乐街道｜同名事件", reviewed_by="tester")
     output = await export_corpus(repository, tmp_path / "result.xlsx")
     await database.close()
 
@@ -69,7 +92,8 @@ async def test_export_uses_two_sheets_original_columns_and_alternating_event_col
     assert workbook.sheetnames == ["重复项", "孤立工单"]
     duplicate = workbook["重复项"]
     singleton = workbook["孤立工单"]
-    assert [cell.value for cell in duplicate[1]][:4] == [
+    assert [cell.value for cell in duplicate[1]][:5] == [
+        "数据来源",
         "事件名称",
         "工单编号",
         "诉求标题",
@@ -78,8 +102,11 @@ async def test_export_uses_two_sheets_original_columns_and_alternating_event_col
     assert duplicate.freeze_panes == "A2"
     assert duplicate.auto_filter.ref == duplicate.dimensions
     assert singleton.max_row == 2
-    assert duplicate["D2"].value == "'=1+1"
+    assert duplicate["A2"].value == "历史表"
+    assert duplicate["E2"].value == "'=1+1"
+    assert duplicate["A2"].fill.fgColor.rgb == duplicate["A3"].fill.fgColor.rgb
     assert duplicate["A2"].fill.fgColor.rgb != duplicate["A4"].fill.fgColor.rgb
+    assert duplicate["A4"].fill.fgColor.rgb == duplicate["A5"].fill.fgColor.rgb
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 [project]
 name = "complaint-dedup-validator"
 version = "0.1.0"
-description = "LLM-driven complaint duplicate validation workspace"
+description = "Incremental complaint event normalization and deduplication workspace"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -15,7 +15,6 @@ dependencies = [
     "openpyxl>=3.1.0",
     "pandas>=2.3.0",
     "pydantic-settings>=2.10.0",
-    "pymilvus>=2.5.0",
     "python-multipart>=0.0.20",
     "sqlalchemy[asyncio]>=2.0.0",
     "uvicorn>=0.35.0",

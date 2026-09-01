@@ -61,7 +61,7 @@ async def test_batch_lease_prevents_two_workers_from_claiming_same_batch(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_worker_stages_uploaded_history_and_processes_approval(tmp_path: Path):
+async def test_worker_stages_and_commits_history_without_user_dictionary_step(tmp_path: Path):
     path = tmp_path / "history.xlsx"
     _workbook(path)
     database = AsyncDatabase(f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}")
@@ -88,14 +88,9 @@ async def test_worker_stages_uploaded_history_and_processes_approval(tmp_path: P
     worker = CorpusBatchWorker(repository, processor, settings)
 
     assert await worker.run_once() == 1
-    staged = await repository.get_batch(batch_id)
-    assert staged["status"] == "reviewing"
-    assert staged["total_records"] == 1
-    assert staged["dictionary_version_id"] is not None
-
-    await repository.request_batch_action(batch_id, "approve")
-    assert await worker.run_once() == 1
     committed = await repository.get_batch(batch_id)
     assert committed["status"] == "committed"
+    assert committed["total_records"] == 1
+    assert committed["dictionary_version_id"] is not None
     assert len(await repository.list_events()) == 1
     await database.close()

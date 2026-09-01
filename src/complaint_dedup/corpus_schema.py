@@ -21,12 +21,14 @@ corpus_sources = Table(
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("file_name", Text, nullable=False),
-    Column("file_hash", String(64), nullable=False, unique=True),
+    Column("file_hash", String(64), nullable=False),
     Column("source_type", String(32), nullable=False),
     Column("column_mapping", JSON, nullable=False, default=dict),
     Column("business_columns", JSON, nullable=False, default=list),
     Column("row_count", Integer, nullable=False, default=0),
+    Column("generation_id", Integer, ForeignKey("corpus_generations.id", ondelete="SET NULL")),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("generation_id", "file_hash", name="uq_corpus_source_generation_hash"),
 )
 
 daily_batches = Table(
@@ -39,6 +41,7 @@ daily_batches = Table(
     Column("stage", String(32), nullable=False, default="uploaded"),
     Column("input_files", JSON, nullable=False, default=dict),
     Column("dictionary_version_id", Integer, ForeignKey("dictionary_versions.id", ondelete="SET NULL")),
+    Column("generation_id", Integer, ForeignKey("corpus_generations.id", ondelete="SET NULL")),
     Column("total_records", Integer, nullable=False, default=0),
     Column("matched_records", Integer, nullable=False, default=0),
     Column("new_events", Integer, nullable=False, default=0),
@@ -51,6 +54,19 @@ daily_batches = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("committed_at", DateTime(timezone=True)),
+)
+
+corpus_generations = Table(
+    "corpus_generations",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("generation_key", String(64), nullable=False, unique=True),
+    Column("status", String(32), nullable=False, default="building"),
+    Column("source_batch_id", String(64), ForeignKey("daily_batches.id", ondelete="SET NULL")),
+    Column("dictionary_version_id", Integer, ForeignKey("dictionary_versions.id", ondelete="SET NULL")),
+    Column("error_message", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("activated_at", DateTime(timezone=True)),
 )
 
 dictionary_versions = Table(
@@ -130,6 +146,7 @@ canonical_anchors = Table(
     Column("canonical_name", Text, nullable=False),
     Column("anchor_type", String(32), nullable=False, default="unknown"),
     Column("location_signature", String(768), nullable=False, default=""),
+    Column("anchor_key_hash", String(64), nullable=False),
     Column("road", String(255)),
     Column("house_no", String(64)),
     Column("building", String(64)),
@@ -142,11 +159,9 @@ canonical_anchors = Table(
     Column("dictionary_version_id", Integer, ForeignKey("dictionary_versions.id", ondelete="CASCADE"), nullable=False),
     UniqueConstraint(
         "street_id",
-        "canonical_name",
-        "anchor_type",
-        "location_signature",
+        "anchor_key_hash",
         "dictionary_version_id",
-        name="uq_anchor_scope_version",
+        name="uq_anchor_hash_version",
     ),
 )
 
@@ -156,10 +171,11 @@ anchor_aliases = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("anchor_id", Integer, ForeignKey("canonical_anchors.id", ondelete="CASCADE"), nullable=False),
     Column("alias", Text, nullable=False),
+    Column("alias_key_hash", String(64), nullable=False),
     Column("evidence_count", Integer, nullable=False, default=0),
     Column("sample_record_ids", JSON, nullable=False, default=list),
     Column("review_status", String(32), nullable=False, default="candidate"),
-    UniqueConstraint("anchor_id", "alias", name="uq_anchor_alias"),
+    UniqueConstraint("anchor_id", "alias_key_hash", name="uq_anchor_alias_hash"),
 )
 
 canonical_issues = Table(
@@ -196,11 +212,15 @@ corpus_records = Table(
     Column("source_id", Integer, ForeignKey("corpus_sources.id", ondelete="RESTRICT"), nullable=False),
     Column("source_batch_id", String(64), ForeignKey("daily_batches.id", ondelete="SET NULL")),
     Column("source_file_hash", String(64), nullable=False),
+    Column("generation_id", Integer, ForeignKey("corpus_generations.id", ondelete="SET NULL")),
     Column("source_row", Integer, nullable=False),
     Column("row_hash", String(64), nullable=False),
+    Column("occurrence_key", String(128), nullable=False, default=""),
+    Column("occurrence_identifiers", JSON, nullable=False, default=list),
     Column("data_source", String(32), nullable=False),
     Column("work_order_id", String(255)),
     Column("received_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
     Column("title_raw", Text),
     Column("title_normalized", Text),
     Column("title_noise_tokens", JSON, nullable=False, default=list),
@@ -211,6 +231,7 @@ corpus_records = Table(
     Column("category_level_4", Text),
     Column("final_category", Text),
     Column("department", Text),
+    Column("processing_department", Text),
     Column("processing_region", String(255)),
     Column("phone_exact", String(32)),
     Column("phone_mask_pattern", String(32)),
@@ -241,7 +262,13 @@ corpus_records = Table(
     Column("raw_json", JSON, nullable=False, default=dict),
     Column("committed", Boolean, nullable=False, default=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
-    UniqueConstraint("source_file_hash", "source_row", "row_hash", name="uq_corpus_source_row_hash"),
+    UniqueConstraint(
+        "generation_id",
+        "source_file_hash",
+        "source_row",
+        "row_hash",
+        name="uq_corpus_source_generation_row_hash",
+    ),
 )
 
 batch_records = Table(
@@ -274,6 +301,8 @@ events = Table(
     Column("street_id", Integer, ForeignKey("canonical_streets.id", ondelete="RESTRICT"), nullable=False),
     Column("anchor_id", Integer, ForeignKey("canonical_anchors.id", ondelete="RESTRICT"), nullable=False),
     Column("issue_id", Integer, ForeignKey("canonical_issues.id", ondelete="RESTRICT"), nullable=False),
+    Column("occurrence_key", String(128), nullable=False, default=""),
+    Column("generation_id", Integer, ForeignKey("corpus_generations.id", ondelete="RESTRICT")),
     Column("event_key_version", String(64), nullable=False),
     Column("event_revision", Integer, nullable=False, default=1),
     Column("event_name", Text, nullable=False),
@@ -284,7 +313,15 @@ events = Table(
     Column("last_received_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    UniqueConstraint("street_id", "anchor_id", "issue_id", "event_key_version", name="uq_event_key_version"),
+    UniqueConstraint(
+        "generation_id",
+        "street_id",
+        "anchor_id",
+        "issue_id",
+        "occurrence_key",
+        "event_key_version",
+        name="uq_corpus_event_generation_key",
+    ),
 )
 
 corpus_event_members = Table(
@@ -363,6 +400,12 @@ corpus_review_actions = Table(
 
 
 Index("ix_corpus_event_key", corpus_records.c.street_id, corpus_records.c.anchor_id, corpus_records.c.issue_id)
+Index("ix_corpus_generation_completed_at", corpus_records.c.generation_id, corpus_records.c.completed_at)
+Index(
+    "ix_corpus_generation_processing_department",
+    corpus_records.c.generation_id,
+    corpus_records.c.processing_department,
+)
 Index("ix_corpus_work_order", corpus_records.c.work_order_id)
 Index("ix_corpus_phone_exact", corpus_records.c.phone_exact)
 Index("ix_corpus_title_normalized", corpus_records.c.title_normalized)

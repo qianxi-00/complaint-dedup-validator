@@ -1,7 +1,0 @@
-<section class="panel" id="groups-panel">
-  <div class="panel-heading"><div><h2>已合并事件组</h2><p>人工确认重复后形成的最终合并集合；单条未合并工单默认不显示。</p></div></div>
-  {% if groups %}
-  <div class="region-table-wrap"><table><thead><tr><th>ID</th><th>事件名称</th><th>地区</th><th>成员数</th><th>时间范围</th></tr></thead><tbody>{% for group in groups %}<tr><td>{{ group.id }}</td><td><form class="event-name-form" action="/jobs/{{ job_id or job.id }}/groups/{{ group.id }}/name" method="post"><input name="name" value="{{ group.name }}" maxlength="200" required><button class="secondary" type="submit">保存</button></form></td><td>{{ group.region or '-' }}</td><td>{{ group.member_count }}</td><td>{{ group.first_received_at or '-' }} 至 {{ group.last_received_at or '-' }}</td></tr>{% endfor %}</tbody></table></div>
-  {% else %}<p class="muted">暂无已合并事件组。完成人工“确认重复”后，相关工单会在这里形成一个事件组。</p>{% endif %}
-  <div class="pagination"><span>共 {{ group_total|default(0) }} 组 · 第 {{ group_page|default(1) }}/{{ group_page_count|default(1) }} 页</span>{% if (group_page|default(1)) > 1 %}<a class="button secondary" hx-get="/jobs/{{ job_id or job.id }}/groups?page={{ (group_page|default(1)) - 1 }}" hx-target="#groups-panel" hx-swap="outerHTML">上一页</a>{% endif %}{% if group_has_next %}<a class="button secondary" hx-get="/jobs/{{ job_id or job.id }}/groups?page={{ (group_page|default(1)) + 1 }}" hx-target="#groups-panel" hx-swap="outerHTML">下一页</a>{% endif %}</div>
-</section>

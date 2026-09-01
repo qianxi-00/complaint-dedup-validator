@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from complaint_dedup.file_inspection import inspect_input_file
-from complaint_dedup.pipeline import InputRecord
+from complaint_dedup.corpus_models import InputRecord
 
 
 def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
@@ -28,7 +28,7 @@ def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
             engine=engine,
             dtype=object,
         )
-    frame.columns = [str(column).strip() for column in frame.columns]
+    frame.columns = [str(column) for column in frame.columns]
     frame = frame.where(pd.notna(frame), None)
 
     def value(row: pd.Series, key: str):
@@ -38,7 +38,7 @@ def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
     result: list[InputRecord] = []
     for index, row in frame.iterrows():
         raw = {
-            str(key).strip(): _text(item)
+            str(key): _text(item)
             for key, item in row.to_dict().items()
             if str(key).strip() != "Unnamed: 37"
         }

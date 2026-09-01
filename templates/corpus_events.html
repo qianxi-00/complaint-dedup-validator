@@ -2,23 +2,55 @@
 {% block title %}事件库{% endblock %}
 {% block nav %}<nav><a href="/">批次导入</a><a href="/batches">批次历史</a><a href="/events">事件库</a></nav>{% endblock %}
 {% block content %}
-<section class="page-heading"><div><h1>事件库</h1><p>不同标准键不会通过相似关系传递合并。</p></div><a class="button" href="/exports/corpus">导出全量结果</a></section>
+<section class="page-heading"><div><h1>事件库</h1><p>不同标准键不会通过相似关系传递合并。</p></div><div class="heading-actions"><a class="button secondary" href="{{ filtered_export_url }}">按当前筛选导出</a><a class="button" href="/exports/corpus">导出全量结果</a></div></section>
+<section class="stats event-stats">
+  <div><span>当前筛选事件</span><strong>{{ total }}</strong></div>
+  <div><span>单条工单事件</span><strong>{{ singleton_count }}</strong></div>
+</section>
 <section class="panel">
   <form method="get" action="/events" class="event-filter-grid corpus-event-filters">
-    <label>地区<select name="region" onchange="this.form.submit()"><option value="">全部地区</option>{% for value in filter_options.regions %}<option value="{{ value }}" {% if filters.region == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
-    <label>街道<select name="street" onchange="this.form.submit()"><option value="">全部街道</option>{% for value in filter_options.streets %}<option value="{{ value }}" {% if filters.street == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
-    <label>事项<select name="issue"><option value="">全部事项</option>{% for value in filter_options.issues %}<option value="{{ value }}" {% if filters.issue == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>地区<select name="region" id="event-region-filter"><option value="">全部地区</option>{% for value in filter_options.regions %}<option value="{{ value }}" {% if filters.region == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>街道<select name="street" id="event-street-filter"><option value="">全部街道</option>{% for value in filter_options.streets %}<option value="{{ value }}" {% if filters.street == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>处理部门<select name="processing_department" id="event-department-filter"><option value="">全部处理部门</option>{% for value in filter_options.processing_departments %}<option value="{{ value }}" {% if filters.processing_department == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>办结开始<input type="date" name="completed_from" value="{{ filters.completed_from }}"></label>
+    <label>办结结束<input type="date" name="completed_to" value="{{ filters.completed_to }}"></label>
     <label>事件名称<input name="event_name" value="{{ filters.event_name }}" placeholder="输入地点或问题"></label>
+    <label>排序<select name="sort" id="event-sort-filter"><option value="updated_desc" {% if filters.sort == 'updated_desc' %}selected{% endif %}>最近更新</option><option value="member_count_desc" {% if filters.sort == 'member_count_desc' %}selected{% endif %}>工单数从多到少</option><option value="member_count_asc" {% if filters.sort == 'member_count_asc' %}selected{% endif %}>工单数从少到多</option></select></label>
+    <div class="event-filter-toggles">
+      <label class="check-control"><input type="checkbox" name="has_daily" value="1" {% if filters.has_daily %}checked{% endif %}>仅看含今日工单的事件</label>
+      <label class="check-control"><input type="checkbox" name="missing_completed" value="1" {% if filters.missing_completed %}checked{% endif %}>仅看无办结时间</label>
+      <label class="check-control"><input type="checkbox" name="hide_singletons" value="1" {% if filters.hide_singletons %}checked{% endif %}>隐藏只有一条工单的事件</label>
+    </div>
     <div class="event-filter-actions"><button type="submit">筛选</button><a class="button secondary" href="/events">重置</a></div>
   </form>
-  <p class="muted">共 {{ total }} 个事件，每页 10 个。</p>
+  <p class="muted">每页显示 10 个事件；筛选条件和排序会在翻页时保留。</p>
   <table class="event-list-table"><thead><tr><th>事件名称</th><th>地区</th><th>街道</th><th>事项</th><th>工单数</th><th>首次受理</th><th>最后受理</th></tr></thead><tbody>
-{% for event in events %}<tr><td data-label="事件名称"><a class="event-link" href="/events/{{ event.id }}">{{ event.event_name }}</a></td><td data-label="地区">{{ event.region or '-' }}</td><td data-label="街道">{{ event.street_name }}</td><td data-label="事项">{{ event.issue_name }}</td><td data-label="工单数">{{ event.member_count }}</td><td data-label="首次受理">{{ event.first_received_at or '-' }}</td><td data-label="最后受理">{{ event.last_received_at or '-' }}</td></tr>{% else %}<tr class="event-list-empty"><td colspan="7" class="muted">没有符合筛选条件的事件</td></tr>{% endfor %}
+{% for event in events %}<tr><td data-label="事件名称"><a class="event-link" href="/events/{{ event.id }}">{{ event.event_name }}</a></td><td data-label="地区">{{ event.region or '-' }}</td><td data-label="街道">{{ event.street_name }}</td><td data-label="事项">{{ event.issue_name }}</td><td data-label="工单数">{{ event.member_count }}</td><td data-label="首次受理">{{ event.first_received_at|localtime }}</td><td data-label="最后受理">{{ event.last_received_at|localtime }}</td></tr>{% else %}<tr class="event-list-empty"><td colspan="7" class="muted">没有符合筛选条件的事件</td></tr>{% endfor %}
   </tbody></table>
   <div class="pagination">
-    {% if page > 1 %}<a class="button secondary" href="/events?region={{ filters.region }}&street={{ filters.street }}&issue={{ filters.issue }}&event_name={{ filters.event_name }}&page={{ page - 1 }}">上一页</a>{% endif %}
-    <span>第 {{ page }} 页</span>
-    {% if page * page_size < total %}<a class="button secondary" href="/events?region={{ filters.region }}&street={{ filters.street }}&issue={{ filters.issue }}&event_name={{ filters.event_name }}&page={{ page + 1 }}">下一页</a>{% endif %}
+    {% if page > 1 %}<a class="button secondary" href="{{ previous_url }}">上一页</a>{% endif %}
+    <span>第 {{ page }} 页，共 {{ page_count }} 页</span>
+    {% if page < page_count %}<a class="button secondary" href="{{ next_url }}">下一页</a>{% endif %}
   </div>
 </section>
+<script>
+  const eventFilterForm = document.querySelector(".corpus-event-filters");
+  const regionFilter = document.getElementById("event-region-filter");
+  const streetFilter = document.getElementById("event-street-filter");
+
+  const departmentFilter = document.getElementById("event-department-filter");
+  const sortFilter = document.getElementById("event-sort-filter");
+  regionFilter.addEventListener("change", () => {
+    streetFilter.value = "";
+
+    eventFilterForm.submit();
+  });
+  streetFilter.addEventListener("change", () => {
+
+    eventFilterForm.submit();
+  });
+
+  departmentFilter.addEventListener("change", () => eventFilterForm.submit());
+  sortFilter.addEventListener("change", () => eventFilterForm.submit());
+</script>
 {% endblock %}
