@@ -46,6 +46,30 @@ class WindowOverlapError(ValueError):
     pass
 
 
+class ActiveJobConflictError(RuntimeError):
+    def __init__(self, job: dict[str, Any]) -> None:
+        self.job = job
+        super().__init__(
+            f"当前有正在执行的任务：{_job_kind_label(job.get('kind'))}（任务 ID：{job.get('id')}），请等待任务完成后再提交。"
+        )
+
+
+JOB_STATUS_LABELS = {
+    "queued": "待处理",
+    "running": "执行中",
+    "completed": "已完成",
+    "failed": "失败",
+}
+
+
+def _job_kind_label(kind: str | None) -> str:
+    return "全量同步" if kind == "sync" else "时间窗口比对"
+
+
+def job_status_label(status: str | None) -> str:
+    return JOB_STATUS_LABELS.get(str(status or ""), "未知状态")
+
+
 @dataclass(frozen=True)
 class EventFilters:
     region: str = ""
@@ -57,6 +81,8 @@ class EventFilters:
     missing_completed: bool = False
     has_target_records: bool = False
     hide_singletons: bool = False
+    keyword: str = ""
+    search_all: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +108,7 @@ class FullCorpusService:
         self.database = database
         self._operation_lock = asyncio.Lock()
         self._comparison_event_cache: dict[str, list[dict[str, Any]]] = {}
+        self._filtered_event_cache: dict[tuple[str, EventFilters], list[dict[str, Any]]] = {}
 
     async def sync_records(
         self,
@@ -256,17 +283,28 @@ class FullCorpusService:
         if kind not in {"sync", "comparison"}:
             raise ValueError("后台任务类型无效")
         job_id = uuid.uuid4().hex
-        async with self.database.engine.begin() as connection:
-            await connection.execute(
-                insert(processing_jobs).values(
-                    id=job_id,
-                    kind=kind,
-                    status="queued",
-                    payload=payload,
-                    progress=0,
-                    created_at=datetime.now(UTC),
+        async with self._operation_lock:
+            async with self.database.engine.begin() as connection:
+                active = (
+                    await connection.execute(
+                        select(processing_jobs)
+                        .where(processing_jobs.c.status.in_(["queued", "running"]))
+                        .order_by(processing_jobs.c.created_at, processing_jobs.c.id)
+                        .limit(1)
+                    )
+                ).mappings().first()
+                if active:
+                    raise ActiveJobConflictError(dict(active))
+                await connection.execute(
+                    insert(processing_jobs).values(
+                        id=job_id,
+                        kind=kind,
+                        status="queued",
+                        payload=payload,
+                        progress=0,
+                        created_at=datetime.now(UTC),
+                    )
                 )
-            )
         return job_id
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -582,7 +620,7 @@ class FullCorpusService:
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
-        rows = await self._filtered_event_summaries(comparison_id, filters or EventFilters())
+        rows = list(await self._filtered_event_summaries(comparison_id, filters or EventFilters()))
         if sort == "member_count_desc":
             rows.sort(key=lambda row: (-row["member_count"], row["id"]))
         elif sort == "member_count_asc":
@@ -683,7 +721,7 @@ class FullCorpusService:
                 .where(comparison_events.c.id == event_id)
                 .values(event_name=normalized)
             )
-        self._comparison_event_cache.pop(str(event["comparison_id"]), None)
+        self._invalidate_comparison_cache(str(event["comparison_id"]))
 
     async def exclude_event_member(
         self, event_id: int, record_key: str, *, target_name: str = ""
@@ -747,7 +785,7 @@ class FullCorpusService:
                     .where(comparison_events.c.id == event_id)
                     .values(status="archived")
                 )
-        self._comparison_event_cache.pop(str(event["comparison_id"]), None)
+        self._invalidate_comparison_cache(str(event["comparison_id"]))
         return int(target_event_id)
 
     async def export_rows(
@@ -790,6 +828,10 @@ class FullCorpusService:
     async def _filtered_event_summaries(
         self, comparison_id: str, filters: EventFilters
     ) -> list[dict[str, Any]]:
+        cache_key = (comparison_id, filters)
+        cached = self._filtered_event_cache.get(cache_key)
+        if cached is not None:
+            return cached
         events = await self.list_comparison_events(comparison_id)
         result: list[dict[str, Any]] = []
         for event in events:
@@ -832,39 +874,68 @@ class FullCorpusService:
                 ),
                 "processing_departments": departments,
             }
-            if filters.region.strip() and summary["region"] != filters.region.strip():
-                continue
-            if filters.street.strip() and summary["street_name"] != filters.street.strip():
-                continue
-            if (
-                filters.event_name.strip()
-                and filters.event_name.strip().casefold()
-                not in str(summary["event_name"]).casefold()
-            ):
-                continue
-            if (
-                filters.processing_department.strip()
-                and filters.processing_department.strip() not in departments
-            ):
-                continue
-            if filters.has_target_records and summary["target_count"] == 0:
-                continue
-            if filters.hide_singletons and summary["member_count"] <= 1:
-                continue
-            if filters.missing_completed and any(
-                value is not None for value in completed_dates
-            ):
-                continue
-            filtered_completed = [value for value in completed_dates if value is not None]
-            if filters.completed_from or filters.completed_to:
-                if not any(
-                    (filters.completed_from is None or value >= filters.completed_from)
-                    and (filters.completed_to is None or value <= filters.completed_to)
-                    for value in filtered_completed
+            keyword = filters.keyword.strip().casefold()
+            if keyword:
+                searchable_values = [
+                    summary["event_name"],
+                    summary["issue_name"],
+                    summary["region"],
+                    summary["street_name"],
+                    *departments,
+                    *[
+                        snapshot.get(field)
+                        for snapshot in snapshots
+                        for field in (
+                            "work_order_id",
+                            "title_raw",
+                            "appeal_text",
+                            "department",
+                            "processing_department",
+                        )
+                    ],
+                ]
+                if not any(keyword in str(value or "").casefold() for value in searchable_values):
+                    continue
+            if not filters.search_all:
+                if filters.region.strip() and summary["region"] != filters.region.strip():
+                    continue
+                if filters.street.strip() and summary["street_name"] != filters.street.strip():
+                    continue
+                if (
+                    filters.event_name.strip()
+                    and filters.event_name.strip().casefold()
+                    not in str(summary["event_name"]).casefold()
                 ):
                     continue
+                if (
+                    filters.processing_department.strip()
+                    and filters.processing_department.strip() not in departments
+                ):
+                    continue
+                if filters.has_target_records and summary["target_count"] == 0:
+                    continue
+                if filters.hide_singletons and summary["member_count"] <= 1:
+                    continue
+                if filters.missing_completed and any(
+                    value is not None for value in completed_dates
+                ):
+                    continue
+                filtered_completed = [value for value in completed_dates if value is not None]
+                if filters.completed_from or filters.completed_to:
+                    if not any(
+                        (filters.completed_from is None or value >= filters.completed_from)
+                        and (filters.completed_to is None or value <= filters.completed_to)
+                        for value in filtered_completed
+                    ):
+                        continue
             result.append(summary)
+        self._filtered_event_cache[cache_key] = result
         return result
+
+    def _invalidate_comparison_cache(self, comparison_id: str) -> None:
+        self._comparison_event_cache.pop(comparison_id, None)
+        for key in [key for key in self._filtered_event_cache if key[0] == comparison_id]:
+            self._filtered_event_cache.pop(key, None)
 
 def _normalize_record(record: InputRecord) -> dict[str, Any]:
     location = record.location or _raw(record.raw_fields, "事发地点", "地址")

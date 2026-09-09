@@ -18,7 +18,12 @@ from complaint_dedup import licensing
 from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.config import Settings
 from complaint_dedup.corpus_database import corpus_database_url
-from complaint_dedup.full_corpus import EventFilters, FullCorpusService
+from complaint_dedup.full_corpus import (
+    ActiveJobConflictError,
+    EventFilters,
+    FullCorpusService,
+    job_status_label,
+)
 from complaint_dedup.full_corpus_worker import FullCorpusWorker
 from complaint_dedup.logging_setup import setup_logging
 
@@ -114,13 +119,16 @@ def create_full_corpus_app(
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request):
         current = service(request)
+        jobs = await current.list_jobs(limit=10)
+        for job in jobs:
+            job["status_label"] = job_status_label(job.get("status"))
         return templates.TemplateResponse(
             request,
             "full_index.html",
             {
                 "sync_runs": await current.list_sync_runs(limit=10),
                 "comparisons": await current.list_comparisons(limit=10),
-                "jobs": await current.list_jobs(limit=10),
+                "jobs": jobs,
                 "order_count": await current.count_current_orders(),
                 "job_id": request.query_params.get("job_id", ""),
             },
@@ -131,6 +139,9 @@ def create_full_corpus_app(
         job = await service(request).get_job(job_id)
         if job is None:
             return JSONResponse({"error": "任务不存在"}, status_code=404)
+        job["status_code"] = job.get("status")
+        job["status"] = job_status_label(job.get("status"))
+        job.pop("progress", None)
         return JSONResponse(jsonable_encoder(job))
 
     @app.post("/sync")
@@ -145,14 +156,18 @@ def create_full_corpus_app(
         payload = await file.read()
         target = upload_dir / f"{uuid.uuid4().hex}-{safe_name}"
         target.write_bytes(payload)
-        job_id = await service(request).create_job(
-            "sync",
-            {
-                "path": str(target),
-                "file_name": safe_name,
-                "file_hash": hashlib.sha256(payload).hexdigest(),
-            },
-        )
+        try:
+            job_id = await service(request).create_job(
+                "sync",
+                {
+                    "path": str(target),
+                    "file_name": safe_name,
+                    "file_hash": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+        except ActiveJobConflictError as exc:
+            target.unlink(missing_ok=True)
+            return HTMLResponse(str(exc), status_code=409)
         return RedirectResponse(f"/?job_id={job_id}", status_code=303)
 
     @app.post("/comparisons")
@@ -186,16 +201,19 @@ def create_full_corpus_app(
                     raise ValueError("待比对和被比对时间段不能重叠")
         except ValueError as exc:
             return HTMLResponse(f"创建比对任务失败：{exc}", status_code=400)
-        job_id = await current.create_job(
-            "comparison",
-            {
-                "time_field": time_field,
-                "target_from": start.isoformat(),
-                "target_to": end.isoformat(),
-                "reference_from": reference_start.isoformat() if reference_start else None,
-                "reference_to": reference_end.isoformat() if reference_end else None,
-            },
-        )
+        try:
+            job_id = await current.create_job(
+                "comparison",
+                {
+                    "time_field": time_field,
+                    "target_from": start.isoformat(),
+                    "target_to": end.isoformat(),
+                    "reference_from": reference_start.isoformat() if reference_start else None,
+                    "reference_to": reference_end.isoformat() if reference_end else None,
+                },
+            )
+        except ActiveJobConflictError as exc:
+            return HTMLResponse(str(exc), status_code=409)
         return RedirectResponse(f"/?job_id={job_id}", status_code=303)
 
     @app.get("/comparisons", response_class=HTMLResponse)
@@ -212,6 +230,8 @@ def create_full_corpus_app(
         sort: str = "updated_desc",
         has_target: str | None = None,
         hide_singletons: str | None = None,
+        keyword: str = "",
+        search_all: str | None = None,
         page: int = 1,
         task_page: int = 1,
     ):
@@ -238,6 +258,8 @@ def create_full_corpus_app(
                 missing_completed=_parse_checkbox(missing_completed),
                 has_target_records=_parse_checkbox(has_target),
                 hide_singletons=_parse_checkbox(hide_singletons),
+                keyword=keyword,
+                search_all=_parse_checkbox(search_all),
             )
         except ValueError as exc:
             return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)
@@ -280,6 +302,8 @@ def create_full_corpus_app(
             "sort": sort,
             "has_target": "1" if filters.has_target_records else "",
             "hide_singletons": "1" if filters.hide_singletons else "",
+            "keyword": filters.keyword,
+            "search_all": "1" if filters.search_all else "",
         }
         previous_url = _query_url("/comparisons", {**query, "page": page - 1}) if page > 1 else ""
         next_url = _query_url("/comparisons", {**query, "page": page + 1}) if page < page_count else ""
@@ -368,6 +392,8 @@ def create_full_corpus_app(
         event_name: str = "",
         has_target: str | None = None,
         hide_singletons: str | None = None,
+        keyword: str = "",
+        search_all: str | None = None,
     ):
         current = service(request)
         if await current.get_comparison(comparison_id) is None:
@@ -385,6 +411,8 @@ def create_full_corpus_app(
                 event_name=event_name,
                 has_target_records=_parse_checkbox(has_target),
                 hide_singletons=_parse_checkbox(hide_singletons),
+                keyword=keyword,
+                search_all=_parse_checkbox(search_all),
             )
         except ValueError as exc:
             return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)
@@ -408,6 +436,8 @@ def create_full_corpus_app(
         event_name: str = "",
         has_target: str | None = None,
         hide_singletons: str | None = None,
+        keyword: str = "",
+        search_all: str | None = None,
     ):
         current = service(request)
         if not comparison_id:
@@ -430,6 +460,8 @@ def create_full_corpus_app(
                 event_name=event_name,
                 has_target_records=_parse_checkbox(has_target),
                 hide_singletons=_parse_checkbox(hide_singletons),
+                keyword=keyword,
+                search_all=_parse_checkbox(search_all),
             )
         except ValueError as exc:
             return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)

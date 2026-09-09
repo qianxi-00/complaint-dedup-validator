@@ -3,10 +3,10 @@
 {% block content %}
 <section class="page-heading"><div><h1>投诉全量工单比对系统</h1><p>上传全量工单表后，后台处理同步或比对任务，页面不会被长时间占用。</p></div><a class="button secondary" href="/comparisons">查看历史比对与事件库</a></section>
 <section class="stats corpus-stats"><div><span>当前工单数</span><strong>{{ order_count }}</strong></div><div><span>最近同步</span><strong>{{ sync_runs|length }}</strong></div><div><span>最近比对</span><strong>{{ comparisons|length }}</strong></div></section>
-{% if job_id %}<section class="panel job-banner" data-job-id="{{ job_id }}"><strong>任务已提交</strong><span id="job-message">正在等待后台处理…</span><a class="button secondary" href="/jobs/{{ job_id }}">查看任务状态</a></section>{% endif %}
+{% if job_id %}<section class="panel job-banner" data-job-id="{{ job_id }}"><strong>任务已提交</strong><span id="job-message">状态查询中…</span><a class="button secondary" href="/jobs/{{ job_id }}">查看任务状态</a></section>{% endif %}
 <section class="panel"><h2>上传全量工单表</h2><form action="/sync" method="post" enctype="multipart/form-data" class="corpus-upload-grid"><label>全量 Excel<input type="file" name="file" accept=".xlsx,.xls,.csv" required></label><button type="submit">同步全量库</button></form><p class="muted">同一工单编号优先覆盖；本次文件缺失的旧工单保留并标记为未出现在最新文件。</p></section>
 <section class="panel" id="comparison-form"><h2>创建时间窗口比对</h2><form action="/comparisons" method="post" class="event-filter-grid"><label>比对字段<select name="time_field"><option value="completed_at">办结时间（默认）</option><option value="received_at">受理时间</option></select></label><label>待比对开始<input type="date" name="target_from"></label><label>待比对结束<input type="date" name="target_to"></label><label>被比对开始（可选）<input type="date" name="reference_from"></label><label>被比对结束（可选）<input type="date" name="reference_to"></label><div class="event-filter-toggles"><span class="muted">不填写被比对时间段时，系统自动使用待比对时间段的补集；空日期工单进入待比对侧。</span></div><button type="submit">生成比对结果</button></form></section>
-{% if jobs %}<section class="panel"><h2>最近后台任务</h2><table><thead><tr><th>任务类型</th><th>状态</th><th>进度</th><th>错误</th><th>创建时间</th></tr></thead><tbody>{% for row in jobs %}<tr><td>{{ '全量同步' if row.kind == 'sync' else '时间窗口比对' }}</td><td>{{ row.status }}</td><td>{{ row.progress }}%</td><td>{{ row.error_message or '-' }}</td><td>{{ row.created_at|localtime }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if jobs %}<section class="panel"><h2>最近后台任务</h2><table><thead><tr><th>任务类型</th><th>状态</th><th>错误</th><th>创建时间</th></tr></thead><tbody>{% for row in jobs %}<tr><td>{{ '全量同步' if row.kind == 'sync' else '时间窗口比对' }}</td><td>{{ row.status_label }}</td><td>{{ row.error_message or '-' }}</td><td>{{ row.created_at|localtime }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
 <script>
   const jobBanner = document.querySelector("[data-job-id]");
   if (jobBanner) {
@@ -16,8 +16,8 @@
       const response = await fetch(`/jobs/${jobId}`, {headers: {Accept: "application/json"}});
       if (!response.ok) return;
       const job = await response.json();
-      message.textContent = job.status === "completed" ? "处理完成，可前往历史比对与事件库查看。" : job.status === "failed" ? `处理失败：${job.error_message || "未知错误"}` : `后台处理中（${job.progress || 0}%）…`;
-      if (["completed", "failed"].includes(job.status)) clearInterval(timer);
+      message.textContent = job.status_code === "completed" ? "状态：已完成，可前往历史比对与事件库查看。" : job.status_code === "failed" ? `状态：失败，${job.error_message || "未知错误"}` : `状态：${job.status || "执行中"}`;
+      if (["completed", "failed"].includes(job.status_code)) clearInterval(timer);
     }, 800);
   }
 </script>

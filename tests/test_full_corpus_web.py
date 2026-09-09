@@ -45,10 +45,12 @@ def test_full_corpus_web_upload_and_create_comparison(tmp_path: Path):
         sync_job_id = response.headers["location"].split("job_id=", 1)[1]
         for _ in range(50):
             sync_job = client.get(f"/jobs/{sync_job_id}").json()
-            if sync_job["status"] == "completed":
+            if sync_job["status_code"] == "completed":
                 break
             time.sleep(0.02)
-        assert sync_job["status"] == "completed"
+        assert sync_job["status_code"] == "completed"
+        assert sync_job["status"] == "已完成"
+        assert "progress" not in sync_job
         home = client.get("/")
         assert home.status_code == 200
         assert "当前工单数" in home.text
@@ -61,10 +63,11 @@ def test_full_corpus_web_upload_and_create_comparison(tmp_path: Path):
         comparison_job_id = result.headers["location"].split("job_id=", 1)[1]
         for _ in range(50):
             comparison_job = client.get(f"/jobs/{comparison_job_id}").json()
-            if comparison_job["status"] == "completed":
+            if comparison_job["status_code"] == "completed":
                 break
             time.sleep(0.02)
-        assert comparison_job["status"] == "completed"
+        assert comparison_job["status_code"] == "completed"
+        assert comparison_job["status"] == "已完成"
         comparison_id = comparison_job["result_json"]["comparison_id"]
         detail = client.get(f"/comparisons/{comparison_id}", follow_redirects=False)
         assert detail.status_code == 303
@@ -189,3 +192,89 @@ def test_full_corpus_job_status_remains_responsive_while_job_runs(
         finally:
             release.set()
             request_thread.join(timeout=2)
+
+
+def test_full_corpus_rejects_second_submission_while_job_is_running(
+    tmp_path: Path, monkeypatch
+):
+    settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
+    database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")
+    app = create_full_corpus_app(settings, database=database)
+    started = Event()
+    release = Event()
+
+    async def blocked_sync(self, records, *, file_name, file_hash=None):
+        started.set()
+        if not release.wait(timeout=5):
+            raise RuntimeError("测试任务未被释放")
+        return type("SyncResult", (), {"sync_id": "sync-test", "inserted": 1, "updated": 0, "missing": 0})()
+
+    monkeypatch.setattr(FullCorpusService, "sync_records", blocked_sync)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/sync",
+            files={"file": ("all.xlsx", workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            follow_redirects=False,
+        )
+        assert first.status_code == 303
+        assert started.wait(timeout=2)
+
+        second = client.post(
+            "/sync",
+            files={"file": ("second.xlsx", workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            follow_redirects=False,
+        )
+        assert second.status_code == 409
+        assert "当前有正在执行的任务" in second.text
+        home = client.get("/")
+        assert "执行中" in home.text
+        assert "进度" not in home.text
+        assert "%" not in home.text
+        release.set()
+
+
+def test_comparison_search_can_be_scoped_or_full(tmp_path: Path):
+    settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
+    database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")
+    app = create_full_corpus_app(settings, database=database)
+    with TestClient(app) as client:
+        response = client.post(
+            "/sync",
+            files={"file": ("all.xlsx", workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        sync_job_id = response.headers["location"].split("job_id=", 1)[1]
+        for _ in range(50):
+            if client.get(f"/jobs/{sync_job_id}").json()["status_code"] == "completed":
+                break
+            time.sleep(0.02)
+        response = client.post(
+            "/comparisons",
+            data={"time_field": "completed_at", "target_from": "2026-09-02", "target_to": "2026-09-02"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        comparison_job_id = response.headers["location"].split("job_id=", 1)[1]
+        for _ in range(50):
+            comparison_job = client.get(f"/jobs/{comparison_job_id}").json()
+            if comparison_job["status_code"] == "completed":
+                break
+            time.sleep(0.02)
+        comparison_id = comparison_job["result_json"]["comparison_id"]
+
+        scoped = client.get(
+            "/comparisons",
+            params={"comparison_id": comparison_id, "region": "不存在的地区", "keyword": "江海区"},
+        )
+        assert scoped.status_code == 200
+        assert "没有符合筛选条件的事件" in scoped.text
+        assert 'name="search_all"' in scoped.text
+
+        full = client.get(
+            "/comparisons",
+            params={"comparison_id": comparison_id, "region": "不存在的地区", "keyword": "江海区", "search_all": "1"},
+        )
+        assert full.status_code == 200
+        assert "江海区" in full.text
