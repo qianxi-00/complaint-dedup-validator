@@ -65,6 +65,8 @@ services:
       - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      disable: true
     command: ["python", "-m", "complaint_dedup.full_corpus_worker"]
     depends_on:
       migrate:
