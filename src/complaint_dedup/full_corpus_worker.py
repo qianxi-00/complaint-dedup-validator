@@ -33,6 +33,7 @@ class FullCorpusWorker:
 
     async def run(self) -> None:
         while not self._stop.is_set():
+            licensing.ensure_not_expired()
             job = await self.service.claim_job()
             if job is None:
                 try:

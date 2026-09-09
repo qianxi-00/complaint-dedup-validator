@@ -11,6 +11,11 @@ if pyarmor gen --output obf src/complaint_dedup; then
     exit 0
 fi
 
+if [ "${PYARMOR_REQUIRE_FULL:-0}" = "1" ]; then
+    echo "[obfuscate] ERROR: full-package obfuscation required but failed" >&2
+    exit 1
+fi
+
 echo "[obfuscate] WARNING: package-level obfuscation failed (trial size limit?)"
 echo "[obfuscate] WARNING: falling back to per-file mode; oversized files stay PLAINTEXT"
 echo "[obfuscate] WARNING: a fully encrypted delivery requires the paid PyArmor license"

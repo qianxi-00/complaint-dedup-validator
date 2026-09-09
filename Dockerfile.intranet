@@ -22,11 +22,18 @@ RUN pip install --no-cache-dir "pyarmor>=9.0,<10"
 
 # 可选:PyArmor 商业许可证(由构建脚本放入 licenses/ 目录;试用版模式下为空目录)
 COPY licenses/ /licenses/
-RUN if ls /licenses/*.zip >/dev/null 2>&1; then pyarmor register /licenses/*.zip; fi
+RUN set -eu; \
+    if ls /licenses/*.zip >/dev/null 2>&1; then \
+        pyarmor register /licenses/*.zip; \
+    elif ls /licenses/*.txt >/dev/null 2>&1; then \
+        pyarmor reg /licenses/*.txt; \
+    fi
 
 COPY src/ /build/src/
 COPY scripts/obfuscate.sh /build/scripts/obfuscate.sh
 ARG EXPIRE_DATE
+ARG PYARMOR_REQUIRE_FULL=0
+ENV PYARMOR_REQUIRE_FULL=$PYARMOR_REQUIRE_FULL
 RUN python -c "import pathlib; expire = '${EXPIRE_DATE}'.split('-'); assert len(expire) == 3, 'EXPIRE_DATE must be YYYY-MM-DD'; pathlib.Path('/build/src/complaint_dedup/licensing_conf.py').write_text('from datetime import date\n\nEXPIRE_DATE = date(%d, %d, %d)\n' % (int(expire[0]), int(expire[1]), int(expire[2])), encoding='utf-8')"
 RUN bash /build/scripts/obfuscate.sh
 

@@ -20,6 +20,7 @@ param(
     [string]$WorkDir = "build/intranet",
     [string]$OutputDir = "build/dist",
     [string]$PyArmorLicense = "",
+    [switch]$RequireFullObfuscation,
     [switch]$SkipTests,
     [switch]$SkipDocker
 )
@@ -37,6 +38,10 @@ try {
         throw "EXPIRE_DATE ($ExpireDate) 必须晚于今天"
     }
     if (-not $ImageTag) { $ImageTag = $ExpireDate }
+    $requireFull = if ($RequireFullObfuscation) { "1" } else { "0" }
+    if ($RequireFullObfuscation -and -not $PyArmorLicense) {
+        throw "启用 -RequireFullObfuscation 时必须提供付费 PyArmor 注册文件"
+    }
     Write-Host "== 授权到期日: $ExpireDate (Asia/Shanghai) ==" -ForegroundColor Cyan
 
     # ---- 1. 源码测试闸门 ----
@@ -89,16 +94,16 @@ scripts/build_intranet.ps1
     if ($SkipDocker) {
         Write-Host "== [3/5] 跳过 Docker 构建(-SkipDocker);构建上下文已就绪: $staging ==" -ForegroundColor Yellow
         Write-Host "  手动构建:" 
-        Write-Host "  docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate `$staging"
-        Write-Host "  docker build -f Dockerfile.intranet -t ${ImageName}:$ImageTag --build-arg EXPIRE_DATE=$ExpireDate $staging"
+        Write-Host "  docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging"
+        Write-Host "  docker build -f Dockerfile.intranet -t ${ImageName}:$ImageTag --build-arg EXPIRE_DATE=$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull $staging"
         return
     }
     Write-Host "== [3/5] Docker 构建:tester 阶段(混淆 + 镜像内测试闸门) ==" -ForegroundColor Cyan
-    docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate `$staging
+    docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging
     if ($LASTEXITCODE -ne 0) { throw "镜像内测试闸门未通过(混淆产物回归失败)" }
 
     Write-Host "== [3/5] Docker 构建:runtime 正式镜像 ==" -ForegroundColor Cyan
-    docker build -f Dockerfile.intranet -t "${ImageName}:$ImageTag" -t "${ImageName}:latest" --build-arg EXPIRE_DATE=`$ExpireDate `$staging
+    docker build -f Dockerfile.intranet -t "${ImageName}:$ImageTag" -t "${ImageName}:latest" --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging
     if ($LASTEXITCODE -ne 0) { throw "镜像构建失败" }
 
     # ---- 4. 导出镜像 ----

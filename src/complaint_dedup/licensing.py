@@ -16,6 +16,7 @@ _DEFAULT_EXPIRE_DATE = date(2099, 12, 31)
 _CLOCK_ROLLBACK_TOLERANCE = timedelta(days=1)
 
 logger = logging.getLogger(__name__)
+_missing_conf_warning_emitted = False
 
 
 class LicenseExpiredError(RuntimeError):
@@ -29,9 +30,17 @@ def _load_conf():
 
 
 def expire_date() -> date:
+    global _missing_conf_warning_emitted
     try:
         return _load_conf().EXPIRE_DATE
     except ImportError:
+        if not _missing_conf_warning_emitted:
+            logger.warning(
+                "未找到 licensing_conf.py，本地开发环境使用远期默认授权日期 %s；"
+                "正式镜像必须在构建期烧录授权日期",
+                _DEFAULT_EXPIRE_DATE.isoformat(),
+            )
+            _missing_conf_warning_emitted = True
         return _DEFAULT_EXPIRE_DATE
 
 
