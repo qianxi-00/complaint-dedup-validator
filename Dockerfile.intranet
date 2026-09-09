@@ -26,7 +26,8 @@ RUN set -eu; \
     if ls /licenses/*.zip >/dev/null 2>&1; then \
         pyarmor register /licenses/*.zip; \
     elif ls /licenses/*.txt >/dev/null 2>&1; then \
-        pyarmor reg /licenses/*.txt; \
+        echo "PyArmor regcode .txt must be activated on the build host first" >&2; \
+        exit 1; \
     fi
 
 COPY src/ /build/src/

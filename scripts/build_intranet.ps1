@@ -84,6 +84,9 @@ scripts/build_intranet.ps1
     # PyArmor 商业许可证(可选)
     if ($PyArmorLicense) {
         if (-not (Test-Path $PyArmorLicense)) { throw "许可证文件不存在: $PyArmorLicense" }
+        if ([IO.Path]::GetExtension($PyArmorLicense).ToLowerInvariant() -ne ".zip") {
+            throw "Docker 构建只接受 PyArmor .zip 注册文件；请先在构建机激活 .txt 注册码"
+        }
         Copy-Item $PyArmorLicense "$staging/licenses/"
         Write-Host "  已包含 PyArmor 许可证: $PyArmorLicense" -ForegroundColor Green
     } else {
