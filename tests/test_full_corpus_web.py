@@ -96,6 +96,16 @@ def test_full_corpus_web_rejects_invalid_comparison_time_field(tmp_path: Path):
     assert response.status_code == 400
 
 
+def test_full_corpus_web_rejects_invalid_filter_and_missing_comparison(tmp_path: Path):
+    settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
+    database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")
+    app = create_full_corpus_app(settings, database=database)
+    with TestClient(app) as client:
+        assert client.get("/comparisons?comparison_id=missing").status_code == 404
+        assert client.get("/comparisons?completed_from=bad").status_code == 400
+        assert client.get("/exports/corpus?comparison_id=missing").status_code == 404
+
+
 def test_full_corpus_web_removed_cannot_link_route(tmp_path: Path):
     settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
     database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")

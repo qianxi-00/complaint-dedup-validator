@@ -222,20 +222,25 @@ def create_full_corpus_app(
         task_page_count = max(1, (task_count + 9) // 10)
         if comparison_id:
             selected = await current.get_comparison(comparison_id)
+            if selected is None:
+                return HTMLResponse("比对任务不存在", status_code=404)
         else:
             selected = comparisons[0] if comparisons else None
         selected_id = str(selected["id"]) if selected else ""
-        filters = EventFilters(
-            region=region,
-            street=street,
-            event_name=event_name,
-            processing_department=processing_department,
-            completed_from=_parse_optional_date(completed_from),
-            completed_to=_parse_optional_date(completed_to),
-            missing_completed=_parse_checkbox(missing_completed),
-            has_target_records=_parse_checkbox(has_target),
-            hide_singletons=_parse_checkbox(hide_singletons),
-        )
+        try:
+            filters = EventFilters(
+                region=region,
+                street=street,
+                event_name=event_name,
+                processing_department=processing_department,
+                completed_from=_parse_optional_date(completed_from),
+                completed_to=_parse_optional_date(completed_to),
+                missing_completed=_parse_checkbox(missing_completed),
+                has_target_records=_parse_checkbox(has_target),
+                hide_singletons=_parse_checkbox(hide_singletons),
+            )
+        except ValueError as exc:
+            return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)
         page = max(page, 1)
         events: list[dict] = []
         total = singleton_count = 0
@@ -369,17 +374,20 @@ def create_full_corpus_app(
             return HTMLResponse("比对任务不存在", status_code=404)
         if scope not in {"all", "filtered"}:
             return HTMLResponse("导出范围无效", status_code=400)
-        filters = None if scope == "all" else EventFilters(
-            region=region,
-            street=street,
-            processing_department=processing_department,
-            completed_from=_parse_optional_date(completed_from),
-            completed_to=_parse_optional_date(completed_to),
-            missing_completed=_parse_checkbox(missing_completed),
-            event_name=event_name,
-            has_target_records=_parse_checkbox(has_target),
-            hide_singletons=_parse_checkbox(hide_singletons),
-        )
+        try:
+            filters = None if scope == "all" else EventFilters(
+                region=region,
+                street=street,
+                processing_department=processing_department,
+                completed_from=_parse_optional_date(completed_from),
+                completed_to=_parse_optional_date(completed_to),
+                missing_completed=_parse_checkbox(missing_completed),
+                event_name=event_name,
+                has_target_records=_parse_checkbox(has_target),
+                hide_singletons=_parse_checkbox(hide_singletons),
+            )
+        except ValueError as exc:
+            return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)
         from complaint_dedup.full_corpus_exporter import export_comparison_workbook
 
         output = Path(settings.database_path).parent / "full_exports" / f"comparison-{comparison_id}-{scope}.xlsx"
@@ -407,19 +415,24 @@ def create_full_corpus_app(
             comparison_id = str(latest[0]["id"]) if latest else ""
         if not comparison_id:
             return HTMLResponse("暂无可导出的比对任务", status_code=404)
+        if await current.get_comparison(comparison_id) is None:
+            return HTMLResponse("比对任务不存在", status_code=404)
         if scope not in {"all", "filtered"}:
             return HTMLResponse("导出范围无效", status_code=400)
-        filters = None if scope == "all" else EventFilters(
-            region=region,
-            street=street,
-            processing_department=processing_department,
-            completed_from=_parse_optional_date(completed_from),
-            completed_to=_parse_optional_date(completed_to),
-            missing_completed=_parse_checkbox(missing_completed),
-            event_name=event_name,
-            has_target_records=_parse_checkbox(has_target),
-            hide_singletons=_parse_checkbox(hide_singletons),
-        )
+        try:
+            filters = None if scope == "all" else EventFilters(
+                region=region,
+                street=street,
+                processing_department=processing_department,
+                completed_from=_parse_optional_date(completed_from),
+                completed_to=_parse_optional_date(completed_to),
+                missing_completed=_parse_checkbox(missing_completed),
+                event_name=event_name,
+                has_target_records=_parse_checkbox(has_target),
+                hide_singletons=_parse_checkbox(hide_singletons),
+            )
+        except ValueError as exc:
+            return HTMLResponse(f"筛选条件无效：{exc}", status_code=400)
         from complaint_dedup.full_corpus_exporter import export_comparison_workbook
 
         output = Path(settings.database_path).parent / "full_exports" / f"comparison-{comparison_id}-{scope}.xlsx"
