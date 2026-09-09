@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 
 from complaint_dedup.corpus_models import InputRecord
 from complaint_dedup.corpus_parser import (
@@ -23,8 +23,8 @@ from complaint_dedup.corpus_schema import (
     comparison_events,
     comparison_record_members,
     comparison_runs,
+    processing_jobs,
     sync_runs,
-    work_order_cannot_links,
     work_order_versions,
     work_orders,
 )
@@ -44,6 +44,19 @@ FAMILY_LABELS = {
 
 class WindowOverlapError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class EventFilters:
+    region: str = ""
+    street: str = ""
+    event_name: str = ""
+    processing_department: str = ""
+    completed_from: date | None = None
+    completed_to: date | None = None
+    missing_completed: bool = False
+    has_target_records: bool = False
+    hide_singletons: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +81,7 @@ class FullCorpusService:
     def __init__(self, database) -> None:
         self.database = database
         self._operation_lock = asyncio.Lock()
+        self._comparison_event_cache: dict[str, list[dict[str, Any]]] = {}
 
     async def sync_records(
         self,
@@ -102,6 +116,7 @@ class FullCorpusService:
         sync_id = uuid.uuid4().hex
         now = datetime.now(UTC)
         inserted_count = updated_count = missing_count = 0
+        business_columns = _business_columns(records)
 
         async with self.database.engine.begin() as connection:
             await connection.execute(
@@ -111,6 +126,7 @@ class FullCorpusService:
                     file_hash=file_hash,
                     status="running",
                     total_rows=len(records),
+                    business_columns=business_columns,
                     created_at=now,
                 )
             )
@@ -200,6 +216,25 @@ class FullCorpusService:
             result = await connection.execute(select(work_orders).order_by(work_orders.c.record_key))
             return [dict(row) for row in result.mappings().all()]
 
+    async def count_current_orders(self) -> int:
+        async with self.database.engine.connect() as connection:
+            value = await connection.scalar(select(func.count()).select_from(work_orders))
+        return int(value or 0)
+
+    async def latest_local_date(self, time_field: str) -> date | None:
+        if time_field not in {"completed_at", "received_at"}:
+            raise ValueError("time_field 必须是 completed_at 或 received_at")
+        async with self.database.engine.connect() as connection:
+            values = (
+                await connection.execute(
+                    select(getattr(work_orders.c, time_field)).where(
+                        work_orders.c.missing_in_latest_upload.is_(False),
+                        getattr(work_orders.c, time_field).is_not(None),
+                    )
+                )
+            ).scalars().all()
+        return max((_local_date(value) for value in values), default=None)
+
     async def version_count(self, sync_id: str) -> int:
         async with self.database.engine.connect() as connection:
             result = await connection.execute(
@@ -207,15 +242,117 @@ class FullCorpusService:
             )
             return len(result.all())
 
-    async def list_sync_runs(self) -> list[dict[str, Any]]:
+    async def list_sync_runs(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[dict[str, Any]]:
         async with self.database.engine.connect() as connection:
-            result = await connection.execute(select(sync_runs).order_by(sync_runs.c.created_at.desc()))
+            statement = select(sync_runs).order_by(sync_runs.c.created_at.desc()).offset(offset)
+            if limit is not None:
+                statement = statement.limit(limit)
+            result = await connection.execute(statement)
             return [dict(row) for row in result.mappings().all()]
 
-    async def list_comparisons(self) -> list[dict[str, Any]]:
+    async def create_job(self, kind: str, payload: dict[str, Any]) -> str:
+        if kind not in {"sync", "comparison"}:
+            raise ValueError("后台任务类型无效")
+        job_id = uuid.uuid4().hex
+        async with self.database.engine.begin() as connection:
+            await connection.execute(
+                insert(processing_jobs).values(
+                    id=job_id,
+                    kind=kind,
+                    status="queued",
+                    payload=payload,
+                    progress=0,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        return job_id
+
+    async def get_job(self, job_id: str) -> dict[str, Any] | None:
         async with self.database.engine.connect() as connection:
-            result = await connection.execute(select(comparison_runs).order_by(comparison_runs.c.created_at.desc()))
+            row = (
+                await connection.execute(
+                    select(processing_jobs).where(processing_jobs.c.id == job_id)
+                )
+            ).mappings().first()
+        return dict(row) if row else None
+
+    async def list_jobs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        async with self.database.engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    select(processing_jobs)
+                    .order_by(processing_jobs.c.created_at.desc())
+                    .limit(limit)
+                )
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def claim_job(self) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        async with self.database.engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    select(processing_jobs)
+                    .where(processing_jobs.c.status == "queued")
+                    .order_by(processing_jobs.c.created_at, processing_jobs.c.id)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+            ).mappings().first()
+            if row is None:
+                return None
+            await connection.execute(
+                update(processing_jobs)
+                .where(
+                    processing_jobs.c.id == row["id"],
+                    processing_jobs.c.status == "queued",
+                )
+                .values(status="running", progress=1, started_at=now)
+            )
+        return {**dict(row), "status": "running", "progress": 1, "started_at": now}
+
+    async def complete_job(self, job_id: str, result: dict[str, Any]) -> None:
+        async with self.database.engine.begin() as connection:
+            await connection.execute(
+                update(processing_jobs)
+                .where(processing_jobs.c.id == job_id)
+                .values(
+                    status="completed",
+                    progress=100,
+                    result_json=result,
+                    completed_at=datetime.now(UTC),
+                )
+            )
+
+    async def fail_job(self, job_id: str, message: str) -> None:
+        async with self.database.engine.begin() as connection:
+            await connection.execute(
+                update(processing_jobs)
+                .where(processing_jobs.c.id == job_id)
+                .values(
+                    status="failed",
+                    progress=100,
+                    error_message=message,
+                    completed_at=datetime.now(UTC),
+                )
+            )
+
+    async def list_comparisons(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        async with self.database.engine.connect() as connection:
+            statement = select(comparison_runs).order_by(comparison_runs.c.created_at.desc()).offset(offset)
+            if limit is not None:
+                statement = statement.limit(limit)
+            result = await connection.execute(statement)
             return [dict(row) for row in result.mappings().all()]
+
+    async def count_comparisons(self) -> int:
+        async with self.database.engine.connect() as connection:
+            value = await connection.scalar(select(func.count()).select_from(comparison_runs))
+        return int(value or 0)
 
     async def get_comparison(self, comparison_id: str) -> dict[str, Any] | None:
         async with self.database.engine.connect() as connection:
@@ -225,9 +362,16 @@ class FullCorpusService:
             return dict(row) if row else None
 
     async def list_comparison_events(self, comparison_id: str) -> list[dict[str, Any]]:
+        cached = self._comparison_event_cache.get(comparison_id)
+        if cached is not None:
+            return cached
         async with self.database.engine.connect() as connection:
             events = (
-                await connection.execute(select(comparison_events).where(comparison_events.c.comparison_id == comparison_id).order_by(comparison_events.c.id))
+                await connection.execute(
+                    select(comparison_events)
+                    .where(comparison_events.c.comparison_id == comparison_id)
+                    .order_by(comparison_events.c.id)
+                )
             ).mappings().all()
             members = (
                 await connection.execute(
@@ -252,7 +396,12 @@ class FullCorpusService:
             value = dict(member)
             value["snapshot"] = snapshot_by_key.get(str(member["record_key"]), {})
             by_event.setdefault(int(member["event_id"]), []).append(value)
-        return [{**dict(event), "members": by_event.get(int(event["id"]), [])} for event in events]
+        result = [
+            {**dict(event), "members": by_event.get(int(event["id"]), [])}
+            for event in events
+        ]
+        self._comparison_event_cache[comparison_id] = result
+        return result
 
     async def list_event_member_snapshots(self, event_id: int) -> list[dict[str, Any]]:
         async with self.database.engine.connect() as connection:
@@ -352,7 +501,7 @@ class FullCorpusService:
         reference_end = _local_start(reference_to + timedelta(days=1)) if reference_to else None
         groups = _split_conflicting_groups(
             {"target": target_rows, "reference": reference_rows},
-            await self._cannot_pairs({row["record_key"] for row in (*target_rows, *reference_rows)}),
+            set(),
         )
         async with self.database.engine.begin() as connection:
             await connection.execute(
@@ -424,66 +573,298 @@ class FullCorpusService:
                 members.append(value)
             return members
 
-    async def add_cannot_link(
+    async def list_event_summaries(
         self,
         comparison_id: str,
-        left_record_key: str,
-        right_record_key: str,
         *,
-        reason: str,
-    ) -> None:
-        if left_record_key == right_record_key:
-            raise ValueError("不能与自身建立禁止关系")
-        left, right = sorted((left_record_key, right_record_key))
-        async with self.database.engine.begin() as connection:
-            existing = (
-                await connection.execute(
-                    select(comparison_record_members.c.record_key).where(
-                        comparison_record_members.c.comparison_id == comparison_id,
-                        comparison_record_members.c.record_key.in_([left, right]),
-                    )
-                )
-            ).scalars().all()
-            if len(existing) != 2:
-                raise ValueError("禁止关系两端工单必须属于当前比对任务")
-            exists = await connection.execute(
-                select(work_order_cannot_links.c.id).where(
-                    work_order_cannot_links.c.left_record_key == left,
-                    work_order_cannot_links.c.right_record_key == right,
-                )
-            )
-            if exists.scalar_one_or_none() is None:
-                await connection.execute(
-                    insert(work_order_cannot_links).values(
-                        left_record_key=left,
-                        right_record_key=right,
-                        reason=reason,
-                        created_at=datetime.now(UTC),
-                    )
-                )
+        filters: EventFilters | None = None,
+        sort: str = "updated_desc",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        rows = await self._filtered_event_summaries(comparison_id, filters or EventFilters())
+        if sort == "member_count_desc":
+            rows.sort(key=lambda row: (-row["member_count"], row["id"]))
+        elif sort == "member_count_asc":
+            rows.sort(key=lambda row: (row["member_count"], row["id"]))
+        else:
+            rows.sort(key=lambda row: row["id"], reverse=True)
+        total = len(rows)
+        return rows[offset : offset + max(limit, 0)], total
 
-    async def _cannot_pairs(self, record_keys: set[str]) -> set[tuple[str, str]]:
-        if not record_keys:
-            return set()
-        async with self.database.engine.connect() as connection:
-            rows = (
-                await connection.execute(select(work_order_cannot_links))
-            ).mappings().all()
+    async def count_singleton_events(
+        self, comparison_id: str, *, filters: EventFilters | None = None
+    ) -> int:
+        rows = await self._filtered_event_summaries(comparison_id, filters or EventFilters())
+        return sum(1 for row in rows if row["member_count"] == 1)
+
+    async def event_filter_options(
+        self, comparison_id: str, *, region: str = "", street: str = ""
+    ) -> dict[str, list[str]]:
+        rows = await self._filtered_event_summaries(
+            comparison_id,
+            EventFilters(region=region, street=street),
+        )
+        regions = sorted({str(row["region"]) for row in rows if row.get("region")})
+        streets = sorted({str(row["street_name"]) for row in rows if row.get("street_name")})
+        departments = sorted(
+            {
+                str(department)
+                for row in rows
+                for department in row.get("processing_departments", [])
+                if department
+            }
+        )
         return {
-            (str(row["left_record_key"]), str(row["right_record_key"]))
-            for row in rows
-            if row["left_record_key"] in record_keys and row["right_record_key"] in record_keys
+            "regions": regions,
+            "streets": streets,
+            "processing_departments": departments,
         }
 
-    async def list_cannot_links(self) -> list[dict[str, Any]]:
+    async def get_event(self, event_id: int) -> dict[str, Any] | None:
         async with self.database.engine.connect() as connection:
-            result = await connection.execute(
-                select(work_order_cannot_links).order_by(
-                    work_order_cannot_links.c.created_at.desc()
+            row = (
+                await connection.execute(
+                    select(comparison_events).where(comparison_events.c.id == event_id)
+                )
+            ).mappings().first()
+        return dict(row) if row else None
+
+    async def list_event_records(
+        self, event_id: int, *, limit: int = 20, offset: int = 0
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], int]:
+        event = await self.get_event(event_id)
+        if event is None:
+            return None, [], 0
+        async with self.database.engine.connect() as connection:
+            count = await connection.scalar(
+                select(func.count())
+                .select_from(comparison_event_members)
+                .where(comparison_event_members.c.event_id == event_id)
+            )
+            rows = (
+                await connection.execute(
+                    select(
+                        comparison_event_members.c.record_key,
+                        comparison_event_members.c.side,
+                        comparison_record_members.c.snapshot_json,
+                    )
+                    .select_from(
+                        comparison_event_members.join(
+                            comparison_record_members,
+                            (comparison_record_members.c.comparison_id == event["comparison_id"])
+                            & (comparison_record_members.c.record_key == comparison_event_members.c.record_key),
+                        )
+                    )
+                    .where(comparison_event_members.c.event_id == event_id)
+                    .order_by(comparison_event_members.c.record_key)
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).mappings().all()
+        records = []
+        for row in rows:
+            value = dict(row)
+            value["event_id"] = event_id
+            value["snapshot"] = value.pop("snapshot_json") or {}
+            records.append(value)
+        return event, records, int(count or 0)
+
+    async def update_event_name(self, event_id: int, name: str) -> None:
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("事件名称不能为空")
+        event = await self.get_event(event_id)
+        if event is None:
+            raise KeyError(event_id)
+        async with self.database.engine.begin() as connection:
+            await connection.execute(
+                update(comparison_events)
+                .where(comparison_events.c.id == event_id)
+                .values(event_name=normalized)
+            )
+        self._comparison_event_cache.pop(str(event["comparison_id"]), None)
+
+    async def exclude_event_member(
+        self, event_id: int, record_key: str, *, target_name: str = ""
+    ) -> int:
+        event = await self.get_event(event_id)
+        if event is None:
+            raise KeyError(event_id)
+        async with self.database.engine.begin() as connection:
+            link = (
+                await connection.execute(
+                    select(comparison_event_members).where(
+                        comparison_event_members.c.event_id == event_id,
+                        comparison_event_members.c.record_key == record_key,
+                    )
+                )
+            ).mappings().first()
+            if link is None:
+                raise KeyError(record_key)
+            await connection.execute(
+                delete(comparison_event_members).where(
+                    comparison_event_members.c.event_id == event_id,
+                    comparison_event_members.c.record_key == record_key,
                 )
             )
-            return [dict(row) for row in result.mappings().all()]
+            target_event_id = None
+            normalized_target = target_name.strip()
+            if normalized_target:
+                target_event_id = await connection.scalar(
+                    select(comparison_events.c.id).where(
+                        comparison_events.c.comparison_id == event["comparison_id"],
+                        comparison_events.c.event_name == normalized_target,
+                        comparison_events.c.status == "active",
+                    ).limit(1)
+                )
+            if target_event_id is None:
+                result = await connection.execute(
+                    insert(comparison_events).values(
+                        comparison_id=event["comparison_id"],
+                        event_key=f"manual|{uuid.uuid4().hex}",
+                        event_name=normalized_target or "单例事件",
+                        status="active",
+                        created_at=datetime.now(UTC),
+                    ).returning(comparison_events.c.id)
+                )
+                target_event_id = result.scalar_one()
+            await connection.execute(
+                insert(comparison_event_members).values(
+                    event_id=target_event_id,
+                    record_key=record_key,
+                    side=link["side"],
+                )
+            )
+            remaining = await connection.scalar(
+                select(func.count())
+                .select_from(comparison_event_members)
+                .where(comparison_event_members.c.event_id == event_id)
+            )
+            if not remaining:
+                await connection.execute(
+                    update(comparison_events)
+                    .where(comparison_events.c.id == event_id)
+                    .values(status="archived")
+                )
+        self._comparison_event_cache.pop(str(event["comparison_id"]), None)
+        return int(target_event_id)
 
+    async def export_rows(
+        self, comparison_id: str, *, filters: EventFilters | None = None
+    ) -> list[dict[str, Any]]:
+        events = await self._filtered_event_summaries(comparison_id, filters or EventFilters())
+        selected_ids = {int(row["id"]) for row in events}
+        if not selected_ids:
+            return []
+        all_events = await self.list_comparison_events(comparison_id)
+        rows: list[dict[str, Any]] = []
+        for event in all_events:
+            if int(event["id"]) not in selected_ids:
+                continue
+            for member in event["members"]:
+                value = dict(member["snapshot"] or {})
+                value.update(
+                    event_id=event["id"],
+                    event_name=event["event_name"],
+                    side=member["side"],
+                    record_key=member["record_key"],
+                )
+                rows.append(value)
+        return rows
+
+    async def sync_business_columns(self, comparison_id: str) -> list[str]:
+        comparison = await self.get_comparison(comparison_id)
+        if comparison is None:
+            raise KeyError(comparison_id)
+        async with self.database.engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    select(sync_runs.c.business_columns).where(
+                        sync_runs.c.id == comparison["sync_id"]
+                    )
+                )
+            ).scalar_one_or_none()
+        return [str(value) for value in (row or [])]
+
+    async def _filtered_event_summaries(
+        self, comparison_id: str, filters: EventFilters
+    ) -> list[dict[str, Any]]:
+        events = await self.list_comparison_events(comparison_id)
+        result: list[dict[str, Any]] = []
+        for event in events:
+            members = event["members"]
+            if not members:
+                continue
+            snapshots = [member["snapshot"] or {} for member in members]
+            first = snapshots[0]
+            completed_dates = [
+                _local_date(_parse_datetime(row.get("completed_at")))
+                for row in snapshots
+            ]
+            departments = sorted(
+                {
+                    str(row.get("processing_department"))
+                    for row in snapshots
+                    if row.get("processing_department")
+                }
+            )
+            summary = {
+                "id": int(event["id"]),
+                "comparison_id": comparison_id,
+                "event_name": event["event_name"],
+                "region": first.get("region"),
+                "street_name": first.get("street") or "未知街道",
+                "issue_name": FAMILY_LABELS.get(
+                    first.get("issue_family"), first.get("category") or "未分类"
+                ),
+                "member_count": len(members),
+                "target_count": sum(
+                    1 for member in members if member["side"] == "target"
+                ),
+                "first_received_at": min(
+                    (row.get("received_at") for row in snapshots if row.get("received_at")),
+                    default=None,
+                ),
+                "last_received_at": max(
+                    (row.get("received_at") for row in snapshots if row.get("received_at")),
+                    default=None,
+                ),
+                "processing_departments": departments,
+            }
+            if filters.region.strip() and summary["region"] != filters.region.strip():
+                continue
+            if filters.street.strip() and summary["street_name"] != filters.street.strip():
+                continue
+            if (
+                filters.event_name.strip()
+                and filters.event_name.strip().casefold()
+                not in str(summary["event_name"]).casefold()
+            ):
+                continue
+            if (
+                filters.processing_department.strip()
+                and filters.processing_department.strip() not in departments
+            ):
+                continue
+            if filters.has_target_records and summary["target_count"] == 0:
+                continue
+            if filters.hide_singletons and summary["member_count"] <= 1:
+                continue
+            if filters.missing_completed and any(
+                value is not None for value in completed_dates
+            ):
+                continue
+            filtered_completed = [value for value in completed_dates if value is not None]
+            if filters.completed_from or filters.completed_to:
+                if not any(
+                    (filters.completed_from is None or value >= filters.completed_from)
+                    and (filters.completed_to is None or value <= filters.completed_to)
+                    for value in filtered_completed
+                ):
+                    continue
+            result.append(summary)
+        return result
 
 def _normalize_record(record: InputRecord) -> dict[str, Any]:
     location = record.location or _raw(record.raw_fields, "事发地点", "地址")
@@ -558,6 +939,18 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
         "raw_json": raw,
         "source_row": record.source_row,
     }
+
+
+def _business_columns(records: list[InputRecord]) -> list[str]:
+    columns: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        for key in record.raw_fields:
+            normalized = str(key)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                columns.append(normalized)
+    return columns
 
 
 def _event_key(

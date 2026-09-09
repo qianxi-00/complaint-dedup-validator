@@ -64,23 +64,26 @@ async def ensure_license_ok(database) -> None:
     ensure_not_expired()
     current = now_shanghai()
     async with database.engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO license_state (id, first_started_at, expire_date, updated_at) "
+                "VALUES (1, :now, :expire_date, :now) "
+                "ON CONFLICT (id) DO NOTHING"
+            ),
+            {"now": current, "expire_date": expire_date()},
+        )
         row = (
             await connection.execute(
                 text("SELECT first_started_at FROM license_state WHERE id = 1")
             )
         ).first()
         if row is None:
-            await connection.execute(
-                text(
-                    "INSERT INTO license_state (id, first_started_at, expire_date, updated_at) "
-                    "VALUES (1, :now, :expire_date, :now)"
-                ),
-                {"now": current, "expire_date": expire_date()},
-            )
-            return
+            raise LicenseExpiredError("无法建立授权状态记录，系统拒绝启动")
         first_started_at = row[0]
         if first_started_at is None:
             return
+        if isinstance(first_started_at, str):
+            first_started_at = datetime.fromisoformat(first_started_at.replace("Z", "+00:00"))
         if first_started_at.tzinfo is None:
             first_started_at = first_started_at.replace(tzinfo=SHANGHAI)
         if current < first_started_at - _CLOCK_ROLLBACK_TOLERANCE:

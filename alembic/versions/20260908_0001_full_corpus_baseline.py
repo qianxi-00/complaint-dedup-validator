@@ -15,12 +15,12 @@ _TABLES = (
     "license_state",
     "work_orders",
     "sync_runs",
+    "processing_jobs",
     "work_order_versions",
     "comparison_runs",
     "comparison_record_members",
     "comparison_events",
     "comparison_event_members",
-    "work_order_cannot_links",
 )
 
 # The old application created these tables across its job, daily-import,
@@ -31,6 +31,7 @@ _LEGACY_TABLES = (
     "corpus_review_actions",
     "event_snapshots",
     "cannot_links",
+    "work_order_cannot_links",
     "record_links",
     "issue_mentions",
     "corpus_event_members",

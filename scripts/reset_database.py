@@ -52,6 +52,7 @@ TABLES_TO_DROP = (
     "jobs",
     "license_state",
     "work_order_cannot_links",
+    "processing_jobs",
     "comparison_event_members",
     "comparison_events",
     "comparison_record_members",
@@ -71,10 +72,11 @@ async def drop_existing_database() -> None:
             existing = await connection.run_sync(
                 lambda sync_connection: set(sa.inspect(sync_connection).get_table_names())
             )
+            drop_suffix = "" if url.startswith("sqlite") else " CASCADE"
             for name in TABLES_TO_DROP:
                 if name not in existing:
                     continue
-                await connection.execute(sa.text(f'DROP TABLE IF EXISTS "{name}" CASCADE'))
+                await connection.execute(sa.text(f'DROP TABLE IF EXISTS "{name}"{drop_suffix}'))
             if "alembic_version" in existing:
                 await connection.execute(sa.text('DROP TABLE IF EXISTS "alembic_version"'))
     finally:

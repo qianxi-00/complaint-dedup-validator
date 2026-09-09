@@ -75,10 +75,29 @@ sync_runs = Table(
     Column("inserted_rows", Integer, nullable=False, default=0, comment="新增工单数"),
     Column("updated_rows", Integer, nullable=False, default=0, comment="更新工单数"),
     Column("missing_rows", Integer, nullable=False, default=0, comment="本次新标记为缺失的工单数"),
+    Column("business_columns", JSON, nullable=False, default=list, comment="上传文件业务列顺序"),
     Column("error_message", Text, comment="同步失败错误信息"),
     Column("created_at", DateTime(timezone=True), nullable=False, comment="同步开始时间"),
     Column("completed_at", DateTime(timezone=True), comment="同步完成或失败时间"),
     comment="全量文件同步记录与统计",
+)
+
+
+processing_jobs = Table(
+    "processing_jobs",
+    metadata,
+    Column("id", String(64), primary_key=True, comment="后台处理任务 ID"),
+    Column("kind", String(32), nullable=False, comment="任务类型：sync 或 comparison"),
+    Column("status", String(32), nullable=False, default="queued", comment="任务状态：queued、running、completed 或 failed"),
+    Column("payload", JSON, nullable=False, default=dict, comment="后台任务输入参数 JSON"),
+    Column("result_json", JSON, comment="后台任务结果 JSON"),
+    Column("progress", Integer, nullable=False, default=0, comment="任务进度百分比"),
+    Column("error_message", Text, comment="任务失败信息"),
+    Column("created_at", DateTime(timezone=True), nullable=False, comment="任务创建时间"),
+    Column("started_at", DateTime(timezone=True), comment="任务开始时间"),
+    Column("completed_at", DateTime(timezone=True), comment="任务完成时间"),
+    Index("ix_processing_jobs_status_created", "status", "created_at"),
+    comment="同步和比对后台任务队列",
 )
 
 
@@ -151,17 +170,4 @@ comparison_event_members = Table(
     Column("record_key", String(128), primary_key=True, comment="工单稳定键"),
     Column("side", String(16), nullable=False, comment="任务侧：target 或 reference"),
     comment="判重事件与工单的成员关系",
-)
-
-
-work_order_cannot_links = Table(
-    "work_order_cannot_links",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True, comment="禁止关系主键"),
-    Column("left_record_key", String(128), ForeignKey("work_orders.record_key", ondelete="CASCADE"), nullable=False, comment="禁止共现关系左端工单键"),
-    Column("right_record_key", String(128), ForeignKey("work_orders.record_key", ondelete="CASCADE"), nullable=False, comment="禁止共现关系右端工单键"),
-    Column("reason", Text, nullable=False, comment="人工确认原因"),
-    Column("created_at", DateTime(timezone=True), nullable=False, comment="禁止关系创建时间"),
-    UniqueConstraint("left_record_key", "right_record_key", name="uq_work_order_cannot_link"),
-    comment="人工确认的全局禁止共现关系",
 )

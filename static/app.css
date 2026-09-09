@@ -115,6 +115,11 @@ fieldset label { margin-bottom: 10px; }
 .event-name-form input { min-width: 280px; }
 .corpus-upload-grid { display: grid; grid-template-columns: 1fr 1.2fr 1.2fr 1.2fr auto; gap: 14px; align-items: end; }
 .corpus-stats { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.job-banner { display: flex; align-items: center; gap: 14px; border-left: 4px solid #245fae; }
+.job-banner span { color: #667085; flex: 1; }
+.corpus-event-filters { margin-bottom: 12px; }
+.event-list-table { min-width: 980px; }
+.event-member-table { min-width: 1680px; }
 .small-stat { font-size: 18px !important; overflow-wrap: anywhere; }
 .review-banner { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-left: 4px solid #c99020; }
 .review-banner h2, .review-banner p { margin: 0; }
@@ -326,6 +331,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .event-list-table .event-list-empty { padding: 16px 0; }
   .event-list-table .event-list-empty td { display: block; }
   .event-list-table .event-list-empty td::before { content: none; }
+  .job-banner { align-items: stretch; flex-direction: column; }
   .batch-preview-table { display: block; min-width: 0; overflow: visible; }
   .batch-preview-table thead { display: none; }
   .batch-preview-table tbody, .batch-preview-table tr, .batch-preview-table td { display: block; width: 100%; }

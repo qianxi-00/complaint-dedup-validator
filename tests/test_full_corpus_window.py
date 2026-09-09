@@ -6,6 +6,7 @@ import pytest_asyncio
 from complaint_dedup.corpus_models import InputRecord
 from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.full_corpus import FullCorpusService, WindowOverlapError
+from complaint_dedup.full_corpus import EventFilters
 
 
 @pytest_asyncio.fixture
@@ -217,53 +218,6 @@ async def test_missing_order_reappears_and_clears_missing_flag(full_database):
 
 
 @pytest.mark.asyncio
-async def test_cannot_link_requires_existing_distinct_records(full_database):
-    service = FullCorpusService(full_database)
-    await service.sync_records([record("A", "2026-09-01 08:00:00")], file_name="all.xlsx")
-    comparison = await service.compare(
-        time_field="completed_at",
-        target_from=date(2026, 9, 1),
-        target_to=date(2026, 9, 1),
-    )
-    with pytest.raises(ValueError, match="禁止关系两端工单必须属于当前比对任务"):
-        await service.add_cannot_link(comparison.comparison_id, "wo:A", "wo:missing", reason="test")
-    with pytest.raises(ValueError, match="不能与自身建立禁止关系"):
-        await service.add_cannot_link(comparison.comparison_id, "wo:A", "wo:A", reason="test")
-
-
-@pytest.mark.asyncio
-async def test_cannot_link_splits_future_comparison_event(full_database):
-    service = FullCorpusService(full_database)
-    await service.sync_records(
-        [
-            record("A", "2026-09-01 08:00:00", completed="2026-09-01 10:00:00"),
-            record("B", "2026-09-01 09:00:00", completed="2026-09-01 11:00:00"),
-        ],
-        file_name="all.xlsx",
-    )
-    before = await service.compare(
-        time_field="completed_at",
-        target_from=date(2026, 9, 1),
-        target_to=date(2026, 9, 1),
-    )
-    assert before.event_count == 1
-
-    await service.add_cannot_link(
-        before.comparison_id,
-        "wo:A",
-        "wo:B",
-        reason="人工确认不是同一事件",
-    )
-    after = await service.compare(
-        time_field="completed_at",
-        target_from=date(2026, 9, 1),
-        target_to=date(2026, 9, 1),
-    )
-    assert after.event_count == 2
-    assert after.singleton_count == 2
-
-
-@pytest.mark.asyncio
 async def test_enterprise_family_groups_same_subject_and_keeps_other_cases_separate(
     full_database,
 ):
@@ -412,13 +366,48 @@ async def test_comparison_results_are_independent_snapshots(full_database):
 
 
 @pytest.mark.asyncio
-async def test_cannot_link_cannot_reference_order_outside_current_snapshot(full_database):
+async def test_event_library_supports_pagination_and_target_window_filter(full_database):
     service = FullCorpusService(full_database)
     await service.sync_records(
         [
             record("A", "2026-09-01 08:00:00", completed="2026-09-01 10:00:00"),
-            record("B", "2026-09-02 08:00:00", completed="2026-09-02 10:00:00"),
-            record("C", "2026-09-03 08:00:00", completed="2026-09-03 10:00:00"),
+            record("B", "2026-09-02 08:00:00", completed="2026-09-02 10:00:00", title="另一处积水"),
+            record("C", "2026-10-02 08:00:00", completed="2026-10-02 10:00:00", title="十月积水"),
+        ],
+        file_name="all.xlsx",
+    )
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 2),
+        target_to=date(2026, 9, 2),
+    )
+
+    page, total = await service.list_event_summaries(
+        comparison.comparison_id,
+        filters=EventFilters(has_target_records=True),
+        limit=1,
+        offset=0,
+    )
+    assert total == 1
+    assert len(page) == 1
+    assert page[0]["target_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_event_summary_pagination_reuses_cached_event_members(
+    full_database, monkeypatch
+):
+    service = FullCorpusService(full_database)
+    await service.sync_records(
+        [
+            record(
+                str(index),
+                "2026-09-01 08:00:00",
+                title=f"独立地点积水{index}",
+                location=f"江海区礼乐街道独立地点{index}",
+                category=f"道路积水{index}",
+            )
+            for index in range(25)
         ],
         file_name="all.xlsx",
     )
@@ -426,9 +415,74 @@ async def test_cannot_link_cannot_reference_order_outside_current_snapshot(full_
         time_field="completed_at",
         target_from=date(2026, 9, 1),
         target_to=date(2026, 9, 1),
-        reference_from=date(2026, 9, 2),
-        reference_to=date(2026, 9, 2),
     )
 
-    with pytest.raises(ValueError, match="禁止关系两端工单必须属于当前比对任务"):
-        await service.add_cannot_link(comparison.comparison_id, "wo:A", "wo:C", reason="test")
+    original_list_events = service.list_comparison_events
+    loads = 0
+
+    async def counted_list_events(*args, **kwargs):
+        nonlocal loads
+        comparison_id = str(args[0])
+        if comparison_id not in service._comparison_event_cache:
+            loads += 1
+        return await original_list_events(*args, **kwargs)
+
+    monkeypatch.setattr(service, "list_comparison_events", counted_list_events)
+    page, total = await service.list_event_summaries(
+        comparison.comparison_id,
+        filters=EventFilters(has_target_records=True),
+        limit=20,
+        offset=0,
+    )
+    options = await service.event_filter_options(comparison.comparison_id)
+
+    assert total == 25
+    assert len(page) == 20
+    assert options["regions"] == ["江海区"]
+    assert loads == 1
+
+
+@pytest.mark.asyncio
+async def test_filtered_export_rows_include_all_members_of_matching_events(full_database):
+    service = FullCorpusService(full_database)
+    await service.sync_records(
+        [
+            record("A", "2026-09-01 08:00:00", completed="2026-09-01 10:00:00"),
+            record("B", "2026-09-02 08:00:00", completed="2026-09-02 10:00:00"),
+        ],
+        file_name="all.xlsx",
+    )
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 1),
+    )
+    rows = await service.export_rows(
+        comparison.comparison_id,
+        filters=EventFilters(has_target_records=True),
+    )
+    assert {row["work_order_id"] for row in rows} == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_event_review_can_rename_and_move_a_member_to_singleton(full_database):
+    service = FullCorpusService(full_database)
+    await service.sync_records(
+        [
+            record("A", "2026-09-01 08:00:00", completed="2026-09-01 10:00:00"),
+            record("B", "2026-09-01 09:00:00", completed="2026-09-01 11:00:00"),
+        ],
+        file_name="all.xlsx",
+    )
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 1),
+    )
+    event = (await service.list_comparison_events(comparison.comparison_id))[0]
+    await service.update_event_name(event["id"], "人工修订事件")
+    target_id = await service.exclude_event_member(event["id"], "wo:A")
+    moved_event, records, total = await service.list_event_records(target_id)
+    assert moved_event["event_name"] == "单例事件"
+    assert total == 1
+    assert records[0]["record_key"] == "wo:A"

@@ -51,5 +51,24 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  worker:
+    image: complaint-dedup-validator-intranet:latest
+    restart: unless-stopped
+    init: true
+    env_file: ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./runtime:/app/runtime
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "-m", "complaint_dedup.full_corpus_worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   pgdata:

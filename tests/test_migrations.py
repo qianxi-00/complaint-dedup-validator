@@ -18,16 +18,19 @@ def test_alembic_upgrades_empty_database_to_full_corpus_head(tmp_path: Path) -> 
         "license_state",
         "work_orders",
         "sync_runs",
+        "processing_jobs",
         "work_order_versions",
         "comparison_runs",
         "comparison_record_members",
         "comparison_events",
         "comparison_event_members",
-        "work_order_cannot_links",
     }
     assert set(inspector.get_table_names()) == expected | {"alembic_version"}
     assert "missing_time_count" in {
         column["name"] for column in inspector.get_columns("comparison_runs")
+    }
+    assert "business_columns" in {
+        column["name"] for column in inspector.get_columns("sync_runs")
     }
 
 
