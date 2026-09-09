@@ -164,6 +164,8 @@ def create_full_corpus_app(
         reference_from: str = Form(""),
         reference_to: str = Form(""),
     ):
+        if time_field not in {"completed_at", "received_at"}:
+            return HTMLResponse("创建比对任务失败：比对字段必须是 completed_at 或 received_at", status_code=400)
         current = service(request)
         latest = await current.latest_local_date(time_field)
         if latest is None:

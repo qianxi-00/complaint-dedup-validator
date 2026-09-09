@@ -80,6 +80,22 @@ def test_full_corpus_web_upload_and_create_comparison(tmp_path: Path):
         assert workbook["孤立工单"]["A1"].value == "数据侧"
 
 
+def test_full_corpus_web_rejects_invalid_comparison_time_field(tmp_path: Path):
+    settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
+    database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")
+    app = create_full_corpus_app(settings, database=database)
+    with TestClient(app) as client:
+        response = client.post(
+            "/comparisons",
+            data={
+                "time_field": "invalid",
+                "target_from": "2026-01-01",
+                "target_to": "2026-01-02",
+            },
+        )
+    assert response.status_code == 400
+
+
 def test_full_corpus_web_removed_cannot_link_route(tmp_path: Path):
     settings = Settings(database_mode="sqlite", database_path=tmp_path / "app.db", _env_file=None)
     database = AsyncDatabase(f"sqlite+aiosqlite:///{settings.database_path}")
