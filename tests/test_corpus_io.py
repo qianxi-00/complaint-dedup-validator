@@ -21,6 +21,6 @@ def test_loader_handles_historical_headers_with_trailing_spaces(tmp_path: Path):
     )
     workbook.save(path)
 
-    row = load_records_auto(path, source="B")[0]
+    row = load_records_auto(path)[0]
     assert row.work_order_id == "0826081308493182401"
     assert row.received_at == "2026-08-13 08:49:31"

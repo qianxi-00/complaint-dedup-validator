@@ -26,3 +26,7 @@ runtime/
 
 .idea/
 .vscode/
+
+# 授权日期构建产物(由 build_intranet.ps1 生成)
+src/complaint_dedup/licensing_conf.py
+build/

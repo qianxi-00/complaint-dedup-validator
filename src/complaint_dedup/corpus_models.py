@@ -4,14 +4,15 @@ from typing import Any
 
 @dataclass(frozen=True)
 class InputRecord:
-    source: str
     source_row: int
     work_order_id: str | None
     title: str | None
     category: str | None
     appeal_text: str | None
     received_at: str | None = None
-    data_source: str | None = None
+    completed_at: str | None = None
+    location: str | None = None
+    processing_department: str | None = None
     category_level_1: str | None = None
     category_level_2: str | None = None
     category_level_3: str | None = None

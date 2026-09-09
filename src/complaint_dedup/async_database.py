@@ -1,4 +1,4 @@
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
@@ -17,6 +17,12 @@ class AsyncDatabase:
         if not database_url.startswith("sqlite"):
             options.update(pool_size=pool_size, max_overflow=max_overflow)
         self.engine: AsyncEngine = create_async_engine(database_url, **options)
+        if database_url.startswith("sqlite"):
+            @event.listens_for(self.engine.sync_engine, "connect")
+            def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
     async def initialize(self) -> None:
         async with self.engine.begin() as connection:

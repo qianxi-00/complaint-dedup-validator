@@ -1,63 +1,41 @@
-# 投诉事件归一化与判重系统
+# 投诉全量工单比对系统
 
-系统采用“持续语料库 + 标准街道/锚点/问题词典 + 精确事件键”的增量架构。历史工单只在首次冷启动时导入；之后每天上传新增工单，审核后追加到冻结历史库。
+系统采用“全量工单库 + 时间窗口比对”架构：
 
-核心事件键为：
+1. 每次上传一份全量 Excel，系统按工单编号更新当前工单库；无编号时使用标准化复合指纹。
+2. 新工单插入，已有工单覆盖最新字段；本次文件缺失的旧工单保留并标记为缺失。
+3. 用户选择受理时间或办结时间，指定待比对时间段；被比对时间段默认取全量库中的补集。
+4. 每次比对生成独立任务快照，可回看和导出，不覆盖历史结果。
 
-```text
-street_id + anchor_id + issue_id + event_key_version
-```
-
-系统不使用相似关系的传递合并，不会因为“工单 A 像 B、B 像 C”就把三者滚成一个大簇。未通过词典审核或无法归一化的工单会保守保留为单例事件。
-
-## 业务模式
-
-- `历史库冷启动`：上传历史文件 B，抽取候选词典，审核后建立冻结事件库。
-- `首次 A/B 联合比对`：先处理并冻结 B，随后把当天文件 A 排入每日增量。
-- `每日新增`：历史库存在后只上传当天文件 A。
-- 重新执行 `历史库冷启动` 会建立新的历史代次并替换旧代次。
-
-上传、解析、词典发布和增量提交均由后台 worker 异步执行。API 只保存文件并创建任务，页面通过 HTMX 轮询进度。
-
-## 技术栈
-
-- Python 3.12、uv
-- FastAPI、Jinja2、HTMX
-- SQLAlchemy Async、PostgreSQL/asyncpg
-- SQLite/aiosqlite 仅用于本地开发和自动化测试
-- XlsxWriter 导出、openpyxl 验证
-
-主流程以规则和 PostgreSQL 精确键为快速通道；对无法精确归一化的锚点、事项批量调用 `.env` 配置的大模型作存疑判定，低置信度仍保守保留为单例。主流程不依赖 Milvus、Embedding 或 Rerank。
+系统不再使用账号隔离、每日新增表、历史代次滚动或后台批次队列。
 
 ## 本地启动
 
 ```powershell
 uv sync
 Copy-Item .env.example .env
-uv run alembic upgrade head
+uv run alembic upgrade head  # 仅适用于空库；旧库请先按下方说明重置
 uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765
-```
-
-SQLite 模式会在 API 进程内启动轻量 worker。PostgreSQL 部署应另开进程：
-
-```powershell
-uv run python -m complaint_dedup.worker_main
 ```
 
 打开 `http://127.0.0.1:8765`。
 
-## 词典
+## 时间窗口规则
 
-词典只在后台数据库中维护，不在前端展示。历史冷启动生成并发布标准街道、锚点和事项；每日新增不会直接污染已发布词典，模型无法高置信归一化的内容保守保存为单例事件。
+- 默认比对字段：`办结时间`。
+- 待比对时间段：用户选择；未填写时默认取上传文件中该字段的最大日期当天。
+- 被比对时间段：默认是全量库中待比对时间段的补集。
+- 手动指定被比对时间段时，必须与待比对时间段不重叠。
+- 所选日期为空的工单进入待比对侧，并在任务详情中单独显示数量。
+- 两侧联合判重，但禁止传递合并。
 
-## 导出
+## 合并规则
 
-全量导出包含两个工作表：
-
-- `重复项`
-- `孤立工单`
-
-第一列为事件名称，后续列保持历史表原始业务字段及顺序。同事件行相邻，并按事件交替使用浅蓝 `#EAF2FB` 和浅米 `#FFF8E7`；同时保留冻结首行、自动筛选、自动换行和公式注入防护。
+- 普通工单使用“地区 + 街道 + 地点 + 事项”确定性事件键。
+- 食品安全、欠薪、产品质量三类企业问题使用“地区 + 街道 + 企业主体 + 问题族”事件键。
+- 不同街道、不同问题族不合并。
+- 无法提取高置信企业主体时保持单例，不因关键词相同而合并。
+- 人工禁止关系跨任务长期生效，但不会自动改写已生成的历史任务。
 
 ## 测试
 
@@ -65,26 +43,23 @@ uv run python -m complaint_dedup.worker_main
 uv run pytest -q
 ```
 
-测试覆盖解析、词典状态、事件键、异步租约、上传队列、人工剔除、导出完整性和 Alembic 迁移。
+当前测试覆盖解析、标准化、全量同步、窗口补集、空日期、任务快照、企业主体合并、人工禁止关系、授权和 Web 上传。
 
 ## Docker 部署
 
-`deploy/compose.yaml` 将代码、配置、运行数据和依赖镜像分离：
-
-```text
-complaint-dedup-validator/
-├── image/Dockerfile
-├── app/
-├── config/.env
-├── runtime/
-└── compose.yaml
-```
-
-首次或依赖变化时重建镜像；普通代码更新只同步 `app/` 并重启容器。部署顺序：
+内网部署使用 `deploy/compose.intranet.yaml`，包含 PostgreSQL、迁移任务和 API 服务，默认端口 `28765`：
 
 ```bash
-docker compose run --rm migrate
-docker compose up -d api worker
+docker compose -f compose.intranet.yaml run --rm migrate
+docker compose -f compose.intranet.yaml up -d
 ```
 
-默认对外端口为 `28765`。生产环境凭据只写入服务器 `config/.env`，不得提交 Git。
+当前版本删除了账号隔离、历史代次和旧批次模型。旧数据库不能直接执行新基线迁移；确认已备份且不保留旧数据时，先执行：
+
+```powershell
+uv run python scripts/reset_database.py --confirm-reset
+```
+
+该命令会删除旧表和旧 `alembic_version`，然后初始化当前使用的 9 张表（含 `license_state`）。生产环境必须先停止服务并完成数据库备份。
+
+生产凭据只保存在服务器 `config/.env`，不得提交 Git。

@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+# 内网交付镜像:Python 源码在本构建过程中由 PyArmor 混淆,最终镜像不含明文源码。
+# 授权到期日期通过 --build-arg EXPIRE_DATE=YYYY-MM-DD 烧录(上海时区)。
+#
+# 构建示例(先跑测试闸门,再出正式镜像):
+#   docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=2027-09-01 .
+#   docker build -f Dockerfile.intranet -t complaint-dedup-validator-intranet:2027-09-01 \
+#       --build-arg EXPIRE_DATE=2027-09-01 .
+
+FROM python:3.12-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.9.18 /uv /uvx /bin/
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+RUN pip install --no-cache-dir "pyarmor>=9.0,<10"
+
+# 可选:PyArmor 商业许可证(由构建脚本放入 licenses/ 目录;试用版模式下为空目录)
+COPY licenses/ /licenses/
+RUN if ls /licenses/*.zip >/dev/null 2>&1; then pyarmor register /licenses/*.zip; fi
+
+COPY src/ /build/src/
+COPY scripts/obfuscate.sh /build/scripts/obfuscate.sh
+ARG EXPIRE_DATE
+RUN python -c "import pathlib; expire = '${EXPIRE_DATE}'.split('-'); assert len(expire) == 3, 'EXPIRE_DATE must be YYYY-MM-DD'; pathlib.Path('/build/src/complaint_dedup/licensing_conf.py').write_text('from datetime import date\n\nEXPIRE_DATE = date(%d, %d, %d)\n' % (int(expire[0]), int(expire[1]), int(expire[2])), encoding='utf-8')"
+RUN bash /build/scripts/obfuscate.sh
+
+FROM builder AS tester
+USER root
+COPY tests/ /build/tests/
+COPY templates/ /build/templates/
+COPY static/ /build/static/
+COPY alembic/ /build/alembic/
+COPY alembic.ini /build/alembic.ini
+COPY scripts/ /build/scripts/
+RUN uv pip install --python /opt/venv/bin/python pytest pytest-asyncio xlwt
+RUN cd /build && PYTHONPATH=/build/src python -m pytest -q tests
+
+FROM python:3.12-slim AS runtime
+COPY --from=ghcr.io/astral-sh/uv:0.9.18 /uv /uvx /bin/
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PYTHONPATH=/app/src
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/runtime \
+    && chown app:app /app/runtime
+WORKDIR /app
+# 复制混淆产物(包目录 + 顶层 pyarmor_runtime,两者都必须在 PYTHONPATH 下)
+COPY --from=builder /build/obf/ /app/src/
+COPY templates/ /app/templates/
+COPY static/ /app/static/
+COPY alembic/ /app/alembic/
+COPY scripts/reset_database.py /app/scripts/reset_database.py
+COPY alembic.ini /app/alembic.ini
+USER app
+EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5)"]
+CMD ["uvicorn", "complaint_dedup.main:app", "--host", "0.0.0.0", "--port", "8765"]

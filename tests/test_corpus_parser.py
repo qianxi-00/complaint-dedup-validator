@@ -1,7 +1,9 @@
 from complaint_dedup.corpus_parser import (
     clean_title,
+    extract_organization_subject,
     extract_occurrence_identifiers,
     extract_previous_work_order_ids,
+    normalize_organization_name,
     normalize_phone,
     parse_complaint,
     split_issue_segments,
@@ -38,8 +40,27 @@ def test_landmark_keeps_direction_and_does_not_become_subject():
     assert result.direction == "门口"
 
 
+def test_inline_issue_marker_is_not_part_of_address_anchor():
+    result = parse_complaint(
+        title="德昌电机门口积水",
+        appeal="地址：江海区礼乐街道德昌电机门口。事项：道路积水。",
+        location="江海区礼乐街道德昌电机门口",
+    )
+    assert result.address_line == "江海区礼乐街道德昌电机门口"
+    assert result.anchor_raw == "德昌电机门口"
+
+
 def test_title_cleaning_removes_template_prefixes_but_keeps_issue():
     assert clean_title("[粤省心]（江海）要求反映东宁路路灯不亮的问题") == "东宁路路灯不亮"
+
+
+def test_organization_subject_strips_address_and_corporate_suffix():
+    extracted = extract_organization_subject(
+        "反映某食品厂有限公司食品安全问题",
+        "地址：江门市江海区礼乐街道某食品厂有限公司。",
+    )
+    assert extracted == "某食品厂有限公司"
+    assert normalize_organization_name(extracted) == "某食品厂"
 
 
 def test_phone_normalization_has_exact_mask_and_invalid_states():

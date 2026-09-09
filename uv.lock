@@ -134,6 +134,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "loguru" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "pydantic-settings" },
@@ -146,6 +147,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pyarmor" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "xlwt" },
@@ -160,6 +162,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "pydantic-settings", specifier = ">=2.10.0" },
@@ -172,6 +175,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pyarmor", specifier = ">=9.0.0" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "xlwt", specifier = ">=1.3.0" },
@@ -288,6 +292,19 @@ wheels = [
 ]
 
 [[package]]
+name = "loguru"
+version = "0.7.3"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
+]
+
+[[package]]
 name = "mako"
 version = "1.4.1"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -387,6 +404,36 @@ source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "pyarmor"
+version = "9.2.7"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "pyarmor-cli-core" },
+]
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d0/86/1a8937731f28e0fe6fe603da1fc4a8d27525dcd26f7b723326e8e83a562c/pyarmor-9.2.7-2-py3-none-any.whl", hash = "sha256:7cf7659f822b4da2434b2e19c3adc9f17868c5610d0e53f4dc2321ff9eefbf5d", size = 3074479, upload-time = "2026-08-29T04:16:04.021Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/de/0a/a95f56b2ecb352080d9f36d3ace313cdcc2b6662cc66ecbdebd137833f8d/pyarmor-9.2.7-3-py3-none-any.whl", hash = "sha256:7dc03740cd31ab38d6064fbd822a1b62aae7d2267aa1dd99be3055f2107b1909", size = 3075842, upload-time = "2026-09-03T08:02:02.361Z" },
+]
+
+[[package]]
+name = "pyarmor-cli-core"
+version = "8.1.2"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/1e/f2/3dbe618b9a2a21e7eb731b238c297cfd4da8301d2d8cf79ab4ed89537c73/pyarmor_cli_core-8.1.2-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:0bfabe4d8db7510a09419a8cbf38d1952759ae48044854666b2a9e7d1e0bfc16", size = 515507, upload-time = "2026-08-26T04:42:40.407Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/45/47/de7e83d98d15882810bd865ca782101cf7c29b69ea0db42ed5e3b3f2a0a5/pyarmor_cli_core-8.1.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9ce0275112a7e502b18db4a67d292ee7a764dc48cd422334c02377b797a2ce91", size = 407727, upload-time = "2026-08-26T04:42:45.129Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/8a/ce/326cb3f7ed988c6bfd8c7365837d2bc99f1105d8a5f029ca591201a962ac/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux1_i686.whl", hash = "sha256:d68e86e01b47f91c1f7b97ed7ff4079159d813624873e4e5d5c660a089f32432", size = 489298, upload-time = "2026-08-26T04:42:51.84Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/8c/71/ce177e470033c27d58d519d5f2547edd09b3415ffaa3ac9fa60fa5c7b846/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux1_x86_64.whl", hash = "sha256:05212ececa5195d1c72113528b9379f691d5f7671ef3c0b5e1c72908c7a46ae8", size = 457692, upload-time = "2026-08-26T04:42:56.947Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/97/8b/3f68f677ddadf7e3730a91c98de10f048146a359e76542207eac7744b621/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:2cf87045cc73fe096721d0e7fd972849bca84da8dde3ba478de75b4abc85e3fe", size = 604351, upload-time = "2026-08-26T04:43:07.276Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a0/f3/1f26f562840586fdcccde66c602f44f3695bcda9b23efaa39227f39e6614/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux2014_armv7l.whl", hash = "sha256:18adeee02d6d829741d28a2ac7a4229020583c491eea475d4164b1d311cc540e", size = 1001047, upload-time = "2026-08-26T04:43:12.975Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/73/4b/50a847ef3a0b8fa12d1891cae2383b6efe04cfafef5bd2137ab4468cb29a/pyarmor_cli_core-8.1.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:f5f4c573a435619273442f1b9f8938d31c7d0f26100a80453e6d0ae054d1e0a2", size = 649548, upload-time = "2026-08-26T04:43:20.541Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/64/2d/0ca6b9036195971200975c69c0a65a2049304458ebfa73caeeb860a94414/pyarmor_cli_core-8.1.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:35ac4f6ba07b20391ab9624c70bbc133537560e227579de6db51fe45535ab93c", size = 446449, upload-time = "2026-08-26T04:43:25.667Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/6e/de/6969ae804814dc1842f363847484dfb05664c4ae2ecb60ac9a2ef69a1e3c/pyarmor_cli_core-8.1.2-cp312-cp312-win32.whl", hash = "sha256:609f5a63d0135d3723203f859e89f7a28c45e09474250705e995d59845d8c307", size = 459858, upload-time = "2026-08-26T04:43:30.669Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/cb/b7/2f3de91992fd22f7d62d7f8c59cc47898e6a260e195c1131da1e7b6a9c25/pyarmor_cli_core-8.1.2-cp312-cp312-win_amd64.whl", hash = "sha256:952558497cbe06bc12beaf014e2c53b20203e4ddef3c8b6028744abf72e14505", size = 420611, upload-time = "2026-08-26T04:43:35.533Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/7e/58/7758001a43902bf162a41d6950cae17bf46432250c37800092b0aea7d815/pyarmor_cli_core-8.1.2-py3-none-any.whl", hash = "sha256:1f07c1cabe45511a4a91a615ded15adabeb8b5b93c4732dd633c4913299185bd", size = 5178, upload-time = "2026-08-26T04:49:14.149Z" },
 ]
 
 [[package]]
@@ -604,6 +651,15 @@ dependencies = [
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/03/18/ccce41535dee1be77735592bd19965f3972c82e07ee703d324709496b716/uvicorn-0.52.1.tar.gz", hash = "sha256:112ec661814189acbccd3f7b86460147cc065fc92c0821afa78918780e4354dd", size = 100571, upload-time = "2026-08-01T18:19:30.732Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/c7/d5/68e6e9bca63c0badf67002890a46d3784c958de45b65e1275ec583ca1f06/uvicorn-0.52.1-py3-none-any.whl", hash = "sha256:e4403f9d93188cf9d1088e9f40e3acd12630e2df8675316704379a7fc20fff6a", size = 79859, upload-time = "2026-08-01T18:19:29.294Z" },
+]
+
+[[package]]
+name = "win32-setctime"
+version = "1.2.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
 ]
 
 [[package]]

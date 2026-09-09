@@ -30,22 +30,16 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10, ge=0)
 
     max_total_rows: int = Field(default=200_000, gt=0)
-    daily_batch_concurrency: int = Field(default=2, gt=0)
-    job_lease_seconds: int = Field(default=300, gt=0)
-    job_heartbeat_seconds: int = Field(default=30, gt=0)
 
-    dictionary_review_required: bool = True
-    normalization_llm_enabled: bool = True
-    normalization_llm_concurrency: int = Field(default=2, gt=0)
-    normalization_llm_min_confidence: float = Field(default=0.9, ge=0, le=1)
-    normalization_llm_batch_size: int = Field(default=10, gt=0)
+    log_level: str = "INFO"
+    log_dir: Path = Path("runtime/logs")
+    log_retention_days: int = Field(default=30, gt=0)
 
     http_max_connections: int = Field(default=24, gt=0)
     http_max_keepalive_connections: int = Field(default=12, gt=0)
     llm_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
     llm_api_key: str = ""
     llm_model: str = ""
-    llm_judgement_model: str = ""
     llm_concurrency: int = Field(default=2, gt=0)
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=3, gt=0)
@@ -60,14 +54,6 @@ class Settings(BaseSettings):
             ZoneInfo(self.app_timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError("APP_TIMEZONE must be a valid IANA timezone") from exc
-        if self.db_pool_size < self.daily_batch_concurrency:
-            raise ValueError(
-                "DB_POOL_SIZE must be at least DAILY_BATCH_CONCURRENCY"
-            )
-        if self.job_heartbeat_seconds >= self.job_lease_seconds:
-            raise ValueError(
-                "JOB_HEARTBEAT_SECONDS must be less than JOB_LEASE_SECONDS"
-            )
         if self.http_max_keepalive_connections > self.http_max_connections:
             raise ValueError(
                 "HTTP_MAX_KEEPALIVE_CONNECTIONS must not exceed HTTP_MAX_CONNECTIONS"

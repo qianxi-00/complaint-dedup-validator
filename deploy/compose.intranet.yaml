@@ -1,0 +1,55 @@
+# 内网部署 compose(全自包含:内置 PostgreSQL,无外网依赖)
+# 目录布局:
+#   compose.intranet.yaml
+#   config/.env          ← 由 deploy/env.intranet.example 复制并填写
+#   runtime/             ← 运行数据(上传文件/导出结果)
+# 使用:
+#   docker compose -f compose.intranet.yaml run --rm migrate
+#   docker compose -f compose.intranet.yaml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: ./config/.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    image: complaint-dedup-validator-intranet:latest
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    env_file: ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: complaint-dedup-validator-intranet:latest
+    restart: unless-stopped
+    init: true
+    env_file: ./config/.env
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./runtime:/app/runtime
+    ports:
+      - "28765:8765"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

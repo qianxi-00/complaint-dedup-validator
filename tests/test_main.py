@@ -2,7 +2,7 @@ from complaint_dedup.config import Settings
 from complaint_dedup.main import build_app
 
 
-def test_corpus_pipeline_uses_corpus_app_with_sqlite(tmp_path) -> None:
+def test_main_uses_full_corpus_app_with_sqlite(tmp_path) -> None:
     app = build_app(
         Settings(
             database_mode="sqlite",
@@ -12,7 +12,7 @@ def test_corpus_pipeline_uses_corpus_app_with_sqlite(tmp_path) -> None:
         )
     )
 
-    assert app.title == "投诉事件归一化工作台"
+    assert app.title == "投诉全量工单比对系统"
 
 
 def test_main_does_not_require_legacy_model_or_vector_runtime(tmp_path) -> None:
@@ -25,4 +25,4 @@ def test_main_does_not_require_legacy_model_or_vector_runtime(tmp_path) -> None:
         )
     )
 
-    assert app.title == "投诉事件归一化工作台"
+    assert app.title == "投诉全量工单比对系统"

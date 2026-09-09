@@ -8,7 +8,7 @@ from complaint_dedup.file_inspection import inspect_input_file
 from complaint_dedup.corpus_models import InputRecord
 
 
-def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
+def load_records_auto(path: str | Path) -> list[InputRecord]:
     input_path = Path(path)
     inspection = inspect_input_file(input_path, preview_rows=0)
     selected = inspection.sheets[0]
@@ -44,10 +44,10 @@ def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
         }
         result.append(
             InputRecord(
-                source=source,
                 source_row=index + 2,
                 work_order_id=_text(value(row, "work_order_id")),
                 received_at=_text(value(row, "received_at")),
+                completed_at=_text(value(row, "completed_at")),
                 title=_text(value(row, "title")),
                 category=_text(value(row, "category")),
                 category_level_1=_text(value(row, "category_level_1")),
@@ -55,6 +55,8 @@ def load_records_auto(path: str | Path, *, source: str) -> list[InputRecord]:
                 category_level_3=_text(value(row, "category_level_3")),
                 category_level_4=_text(value(row, "category_level_4")),
                 appeal_text=_text(value(row, "appeal_text")),
+                location=_text(value(row, "location")),
+                processing_department=_text(value(row, "processing_department")),
                 raw_fields=raw,
             )
         )

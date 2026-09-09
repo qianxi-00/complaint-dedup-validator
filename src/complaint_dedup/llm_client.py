@@ -1,10 +1,12 @@
 import json
 import re
 import asyncio
+import time
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
 import httpx
+from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 
@@ -61,6 +63,7 @@ class LlmClient:
     ) -> ResponseModel:
         last_error: Exception | None = None
         raw_response: str | None = None
+        started = time.monotonic()
         async with self._semaphore:
             for attempt in range(self._max_retries):
                 try:
@@ -72,6 +75,13 @@ class LlmClient:
                     }
                     if self._send_enable_thinking:
                         payload["enable_thinking"] = self._enable_thinking
+                    logger.debug(
+                        "LLM 请求 model={} attempt={}/{} 批量大小={}",
+                        self._model,
+                        attempt + 1,
+                        self._max_retries,
+                        len(payload["messages"]),
+                    )
                     response = await self._client.post(
                         "chat/completions",
                         json=payload,
@@ -80,13 +90,38 @@ class LlmClient:
                     content = response.json()["choices"][0]["message"]["content"]
                     raw_response = str(content)
                     payload = json.loads(_strip_code_fence(content))
-                    return response_model.model_validate(payload)
+                    result = response_model.model_validate(payload)
+                    logger.info(
+                        "LLM 调用成功 model={} attempt={} 决策数={} 耗时={:.1f}s",
+                        self._model,
+                        attempt + 1,
+                        len(getattr(result, "decisions", []) or []),
+                        time.monotonic() - started,
+                    )
+                    return result
                 except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
                     last_error = exc
                     if isinstance(exc, httpx.HTTPStatusError):
                         raw_response = exc.response.text
                     if attempt + 1 < self._max_retries:
+                        logger.warning(
+                            "LLM 调用失败,准备重试 model={} attempt={}/{} 类型={} 摘要={}",
+                            self._model,
+                            attempt + 1,
+                            self._max_retries,
+                            type(exc).__name__,
+                            str(exc)[:200],
+                        )
                         await asyncio.sleep(_retry_delay(attempt, response if "response" in locals() else None))
+        snippet = (raw_response or "")[:400].replace("\n", " ")
+        logger.error(
+            "LLM 调用最终失败(已重试 {} 次) model={} 类型={} 错误={} 响应摘要={}",
+            self._max_retries,
+            self._model,
+            type(last_error).__name__ if last_error else "-",
+            str(last_error)[:200],
+            snippet,
+        )
         raise LlmResponseError(
             "模型响应无法通过结构化校验", raw_response=raw_response
         ) from last_error

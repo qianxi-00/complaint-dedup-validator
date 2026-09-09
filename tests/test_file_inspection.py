@@ -109,6 +109,9 @@ def test_suggests_canonical_field_mapping() -> None:
         "category_level_4": "事项分类四级",
         "category": "事项分类",
         "appeal_text": "投诉内容",
+        "completed_at": None,
+        "location": None,
+        "processing_department": None,
     }
 
 
@@ -125,6 +128,9 @@ def test_mapping_marks_unknown_fields_as_none() -> None:
         "category_level_4",
         "category",
         "appeal_text",
+        "completed_at",
+        "location",
+        "processing_department",
     }
     assert all(value is None for value in mapping.values())
 

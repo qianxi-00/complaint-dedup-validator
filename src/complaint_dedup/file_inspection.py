@@ -37,7 +37,10 @@ class FileInspection:
 FIELD_ALIASES = {
     "work_order_id": ("work_order_id", "工单编号", "工单号", "受理编号", "编号"),
     "received_at": ("received_at", "受理时间", "受理日期", "创建时间", "来件时间"),
+    "completed_at": ("completed_at", "办结时间", "办结日期", "结案时间"),
     "title": ("title", "诉求标题", "工单标题", "投诉标题", "标题"),
+    "location": ("location", "事发地点", "发生地点", "投诉地点", "地址"),
+    "processing_department": ("processing_department", "处理部门", "承办部门"),
     "category_level_1": ("category_level_1", "事项分类一级", "一级事项分类"),
     "category_level_2": ("category_level_2", "事项分类二级", "二级事项分类"),
     "category_level_3": ("category_level_3", "事项分类三级", "三级事项分类"),

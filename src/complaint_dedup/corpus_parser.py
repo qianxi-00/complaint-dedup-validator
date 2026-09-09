@@ -89,7 +89,7 @@ _ORGANIZATION_SUFFIXES = (
     "药店",
 )
 _ORGANIZATION_RE = re.compile(
-    rf"[^\s，。；：、\n\r]{{2,50}}(?:{'|'.join(_ORGANIZATION_SUFFIXES)})"
+    rf"[^\s，。；：、\n\r]{{1,50}}(?:{'|'.join(_ORGANIZATION_SUFFIXES)})"
 )
 _ORG_ADDRESS_PREFIX_RE = re.compile(
     r"^.*?(?:街道|镇).*?(?:路|大道|街|巷)(?:\d+(?:号|幢|栋|座))?"
@@ -247,10 +247,12 @@ def split_issue_segments(text: str | None) -> list[IssueSegment]:
             )
     return segments
 def normalize_organization_name(value: str | None) -> str:
-
-
     text = unicode_normalize("NFKC", str(value or "")).casefold()
-    return re.sub(r"\s+", "", text)
+    text = re.sub(r"\s+", "", text)
+    for suffix in ("股份有限公司", "有限责任公司", "有限公司", "集团公司"):
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[: -len(suffix)]
+    return text
 
 
 def extract_organization_subject(*texts: str | None) -> str | None:
@@ -262,6 +264,21 @@ def extract_organization_subject(*texts: str | None) -> str | None:
             )
             if address_match:
                 candidate = candidate[address_match.end() :]
+            candidate = re.sub(
+                r"^(?:反映|投诉|举报|咨询|要求|关于)",
+                "",
+                candidate,
+            )
+            for _ in range(3):
+                stripped = re.sub(
+                    r"^(?:[\u4e00-\u9fff]{2,8}(?:区|市|县)|"
+                    r"[\u4e00-\u9fff]{1,6}(?:街道|镇))",
+                    "",
+                    candidate,
+                )
+                if stripped == candidate:
+                    break
+                candidate = stripped
             if len(candidate) >= 4 and not re.fullmatch(r"(?:某|该|此|相关)公司", candidate):
                 return candidate
     return None
@@ -345,7 +362,12 @@ def _extract_address_line(
             normalized,
         )
         if match:
-            return match.group(1).strip(), "appeal_address"
+            address = re.split(
+                r"[。；;]\s*(?:事项|诉求|备注)\s*[:：]",
+                match.group(1).strip(),
+                maxsplit=1,
+            )[0]
+            return address.strip(), "appeal_address"
     if location and str(location).strip():
         return str(location).strip(), "location"
     if title and str(title).strip():

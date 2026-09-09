@@ -25,18 +25,11 @@ def test_settings_load_active_defaults() -> None:
     assert settings.db_pool_size == 10
     assert settings.db_max_overflow == 10
     assert settings.max_total_rows == 200_000
-    assert settings.daily_batch_concurrency == 2
-    assert settings.dictionary_review_required is True
-    assert settings.normalization_llm_enabled is True
-    assert settings.normalization_llm_concurrency == 2
-    assert settings.normalization_llm_min_confidence == 0.9
-    assert settings.normalization_llm_batch_size == 10
     assert settings.http_max_connections == 24
     assert settings.http_max_keepalive_connections == 12
     assert str(settings.llm_base_url).rstrip("/") == "http://127.0.0.1:8000/v1"
     assert settings.llm_api_key == ""
     assert settings.llm_model == ""
-    assert settings.llm_judgement_model == ""
     assert settings.llm_concurrency == 2
     assert settings.llm_timeout_seconds == 180
     assert settings.llm_max_retries == 3
@@ -44,8 +37,6 @@ def test_settings_load_active_defaults() -> None:
     assert settings.llm_max_tokens == 4096
     assert settings.llm_enable_thinking is False
     assert settings.llm_send_enable_thinking is True
-    assert settings.job_lease_seconds == 300
-    assert settings.job_heartbeat_seconds == 30
 
 
 @pytest.mark.parametrize(
@@ -54,13 +45,8 @@ def test_settings_load_active_defaults() -> None:
         ("app_port", 0),
         ("db_pool_size", 0),
         ("max_total_rows", 0),
-        ("daily_batch_concurrency", 0),
-        ("normalization_llm_concurrency", 0),
-        ("normalization_llm_batch_size", 0),
         ("http_max_connections", 0),
         ("http_max_keepalive_connections", 0),
-        ("job_lease_seconds", 0),
-        ("job_heartbeat_seconds", 0),
         ("llm_concurrency", 0),
         ("llm_timeout_seconds", 0),
         ("llm_max_retries", 0),
@@ -80,16 +66,6 @@ def test_settings_rejects_missing_llm_base_url() -> None:
 def test_settings_rejects_invalid_timezone() -> None:
     with pytest.raises(ValidationError, match="APP_TIMEZONE"):
         make_settings(app_timezone="Mars/Base")
-
-
-def test_settings_rejects_pool_smaller_than_batch_concurrency() -> None:
-    with pytest.raises(ValidationError, match="DB_POOL_SIZE"):
-        make_settings(daily_batch_concurrency=4, db_pool_size=3)
-
-
-def test_settings_rejects_invalid_heartbeat_window() -> None:
-    with pytest.raises(ValidationError, match="JOB_HEARTBEAT_SECONDS"):
-        make_settings(job_lease_seconds=30, job_heartbeat_seconds=30)
 
 
 def test_settings_rejects_keepalive_larger_than_connection_pool() -> None:
