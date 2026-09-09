@@ -68,12 +68,28 @@ def test_upgrade_removes_known_legacy_tables(tmp_path: Path) -> None:
     assert "users" not in inspector.get_table_names()
 
 
+def test_upgrade_adds_business_columns_to_existing_sync_runs(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-sync-runs.db"
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE sync_runs (id VARCHAR(64) PRIMARY KEY)"))
+
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path.as_posix()}")
+    config.attributes["preserve_sqlalchemy_url"] = True
+    command.upgrade(config, "head")
+
+    assert "business_columns" in {
+        column["name"] for column in inspect(engine).get_columns("sync_runs")
+    }
+
+
 def test_alembic_has_single_new_baseline_head() -> None:
     config = Config("alembic.ini")
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["20260908_0001"]
+    assert script.get_heads() == ["20260909_0002"]
 
 
 def test_alembic_can_downgrade_and_reupgrade(tmp_path: Path) -> None:
