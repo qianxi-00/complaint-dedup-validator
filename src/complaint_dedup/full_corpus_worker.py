@@ -82,7 +82,7 @@ class FullCorpusWorker:
                 }
             if job["kind"] == "comparison":
                 result = await service.compare(
-                    time_field=str(payload.get("time_field") or "completed_at"),
+                    time_field=str(payload.get("time_field") or "received_at"),
                     target_from=date.fromisoformat(str(payload["target_from"])),
                     target_to=date.fromisoformat(str(payload["target_to"])),
                     reference_from=(

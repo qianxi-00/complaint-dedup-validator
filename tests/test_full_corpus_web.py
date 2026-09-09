@@ -138,6 +138,17 @@ def test_full_corpus_web_exposes_comparison_library(tmp_path: Path):
         assert "历史比对任务" in library.text
 
 
+def test_comparison_library_filter_layout_removes_event_name_and_places_sort_after_completed_to(
+    tmp_path: Path,
+):
+    template = (Path(__file__).parents[1] / "templates" / "full_comparisons.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'name="event_name"' not in template
+    assert template.index('name="completed_to"') < template.index('name="sort"')
+
+
 def test_full_corpus_job_status_remains_responsive_while_job_runs(
     tmp_path: Path, monkeypatch
 ):

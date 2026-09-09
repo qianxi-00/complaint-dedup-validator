@@ -74,7 +74,6 @@ def job_status_label(status: str | None) -> str:
 class EventFilters:
     region: str = ""
     street: str = ""
-    event_name: str = ""
     processing_department: str = ""
     completed_from: date | None = None
     completed_to: date | None = None
@@ -463,7 +462,7 @@ class FullCorpusService:
     async def compare(
         self,
         *,
-        time_field: str = "completed_at",
+        time_field: str = "received_at",
         target_from: date,
         target_to: date,
         reference_from: date | None = None,
@@ -481,7 +480,7 @@ class FullCorpusService:
     async def _compare(
         self,
         *,
-        time_field: str = "completed_at",
+        time_field: str = "received_at",
         target_from: date,
         target_to: date,
         reference_from: date | None = None,
@@ -900,12 +899,6 @@ class FullCorpusService:
                 if filters.region.strip() and summary["region"] != filters.region.strip():
                     continue
                 if filters.street.strip() and summary["street_name"] != filters.street.strip():
-                    continue
-                if (
-                    filters.event_name.strip()
-                    and filters.event_name.strip().casefold()
-                    not in str(summary["event_name"]).casefold()
-                ):
                     continue
                 if (
                     filters.processing_department.strip()

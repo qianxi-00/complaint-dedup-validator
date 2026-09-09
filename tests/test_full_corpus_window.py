@@ -135,6 +135,26 @@ async def test_default_reference_window_is_complement_and_no_overlap(full_databa
 
 
 @pytest.mark.asyncio
+async def test_compare_defaults_to_received_at(full_database):
+    service = FullCorpusService(full_database)
+    await service.sync_records(
+        [
+            record("A", "2026-09-01 08:00:00", completed="2026-09-10 10:00:00"),
+            record("B", "2026-09-02 08:00:00", completed="2026-09-01 10:00:00"),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 1),
+    )
+
+    members = await service.list_comparison_members(comparison.comparison_id)
+    assert {row["work_order_id"] for row in members if row["side"] == "target"} == {"A"}
+
+
+@pytest.mark.asyncio
 async def test_duplicate_full_file_is_idempotent(full_database):
     service = FullCorpusService(full_database)
     rows = [record("A", "2026-09-01 08:00:00")]
