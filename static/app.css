@@ -323,10 +323,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .pair-panel > .pagination { padding: 0 20px 18px; }
 .event-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .event-filter-grid > *, .corpus-upload-grid > * { min-width: 0; }
-.keyword-search-group { align-items: end; display: flex; gap: 12px; grid-column: span 2; min-width: 0; }
-.keyword-search-field { flex: 1 1 auto; min-width: 0; }
+.keyword-search-group { align-items: end; display: grid; gap: 12px; grid-column: span 3; grid-template-columns: minmax(360px, 680px) auto; min-width: 0; }
+.keyword-search-field { min-width: 0; }
 .search-input-wrap { display: block; position: relative; }
-.search-input-wrap input { border-color: #8da8cb; box-shadow: 0 1px 2px rgb(36 95 174 / 10%); padding-left: 36px; }
+.search-input-wrap input { border-color: #8da8cb; box-shadow: 0 1px 2px rgb(36 95 174 / 10%); padding-left: 36px; width: 100%; }
 .search-input-wrap input::placeholder { color: #8491a3; }
 .search-input-wrap input:focus { box-shadow: 0 0 0 3px rgb(36 95 174 / 12%); }
 .search-icon { border: 2px solid #52739d; border-radius: 50%; height: 14px; left: 12px; pointer-events: none; position: absolute; top: 50%; transform: translateY(-65%); width: 14px; }
@@ -360,7 +360,7 @@ tbody tr:last-child td { border-bottom: 0; }
   table:not(.pair-table) { display: block; overflow-x: auto; }
   .pair-filter-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
   .event-filter-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
-  .keyword-search-group { grid-column: 1 / -1; }
+  .keyword-search-group { grid-column: 1 / -1; grid-template-columns: minmax(320px, 1fr) auto; }
   .review-form-grid { grid-template-columns: 1fr; }
 }
 
@@ -375,7 +375,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .actions { flex-wrap: wrap; }
   .pair-filter-grid { grid-template-columns: 1fr; }
   .event-filter-grid { grid-template-columns: 1fr; }
-  .keyword-search-group { align-items: end; grid-column: auto; }
+  .keyword-search-group { align-items: end; grid-column: auto; grid-template-columns: minmax(0, 1fr) auto; }
   .corpus-upload-grid { grid-template-columns: 1fr; }
   .review-banner { align-items: stretch; flex-direction: column; }
   .review-banner .action-row, .inline-form, .compact-filters, .review-form-grid form { display: grid; grid-template-columns: 1fr; width: 100%; }
