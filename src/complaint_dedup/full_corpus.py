@@ -12,9 +12,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, insert, select, update
 
+from complaint_dedup.category_rules import canonical_category, problem_family_for
 from complaint_dedup.corpus_models import InputRecord
 from complaint_dedup.corpus_parser import (
     extract_organization_subject,
+    extract_title_anchor,
     normalize_organization_name,
     parse_complaint,
 )
@@ -117,6 +119,9 @@ class ComparisonResult:
     llm_coverage: float
     fallback_count: int
     decision_count: int
+    request_count: int = 0
+    llm_error_count: int = 0
+    span_guard_count: int = 0
 
 
 class FullCorpusService:
@@ -697,6 +702,9 @@ class FullCorpusService:
             dedup.llm_coverage,
             dedup.fallback_count,
             dedup.decision_count,
+            dedup.request_count,
+            dedup.llm_error_count,
+            dedup.span_guard_count,
         )
 
     async def list_comparison_members(self, comparison_id: str) -> list[dict[str, Any]]:
@@ -1050,7 +1058,10 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
     )
     family = _issue_family(record.title, category, appeal)
     street = parsed.street or "未知街道"
-    anchor = parsed.anchor_raw or "未知地点"
+    # 锚点缺失时从标题二次抽取，减少“未知地点”导致的强制单例
+    anchor = parsed.anchor_raw or extract_title_anchor(record.title) or "未知地点"
+    canonical = canonical_category(category)
+    problem = problem_family_for(canonical)
     work_order_id = _clean(record.work_order_id)
     stable_source = work_order_id or json.dumps(
         {
@@ -1067,7 +1078,8 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
         parsed.region,
         street,
         anchor,
-        category,
+        canonical,
+        problem,
         org,
         family,
         record_key,
@@ -1277,18 +1289,26 @@ def _event_key(
     region: str | None,
     street: str,
     anchor: str,
-    category: str | None,
+    canonical_category_value: str | None,
+    problem_family: str | None,
     org: str | None,
     family: str | None,
     record_key: str,
 ) -> str:
+    """确定性基础事件键（v4）。
+
+    企业问题族（食品安全/欠薪/产品质量）仍按“主体 + 族”聚合；
+    普通键升级为“地点 + 问题族”，落实“同地点同问题族可合、跨族拆分”。
+    锚点未知或无分类时保持单例，由内容/正文指纹与模型灰区兜底。
+    """
     if family and org:
         return "enterprise|" + "|".join(_key_part(v) for v in (region, street, org, family))
     if family:
         return "singleton|" + _key_part(record_key)
-    if anchor == "未知地点" or not category:
+    group = problem_family or canonical_category_value
+    if anchor == "未知地点" or not group:
         return "singleton|" + _key_part(record_key)
-    return "ordinary|" + "|".join(_key_part(v) for v in (region, street, anchor, category or "未分类"))
+    return "ordinary|" + "|".join(_key_part(v) for v in (region, street, anchor, group))
 
 
 def _event_name(row: dict[str, Any]) -> str:

@@ -37,7 +37,7 @@ work_orders = Table(
     Column("record_key", String(128), primary_key=True, comment="工单稳定键，有编号时为工单编号键，否则为复合指纹键"),
     Column("work_order_id", String(255), comment="原始工单编号"),
     Column("canonical_work_order_id", String(255), comment="去除 HBD 等转派后缀后的基础工单编号"),
-    Column("complaint_fingerprint", String(64), comment="标题、诉求和地点的完整内容指纹"),
+    Column("complaint_fingerprint", String(64), comment="标题与诉求正文的完整内容指纹（不含地点，feature-v3）"),
     Column("received_at", DateTime(timezone=True), comment="受理时间，按 UTC 存储并按上海时区展示"),
     Column("completed_at", DateTime(timezone=True), comment="办结时间，按 UTC 存储并按上海时区展示"),
     Column("title_raw", Text, comment="原始诉求标题"),

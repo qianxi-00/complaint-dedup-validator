@@ -5,6 +5,8 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
+from complaint_dedup.dedup_features import FEATURE_VERSION
+
 
 def test_alembic_upgrades_empty_database_to_full_corpus_head(tmp_path: Path) -> None:
     database_path = tmp_path / "migration.db"
@@ -154,7 +156,7 @@ def test_upgrade_backfills_dedup_features_for_existing_work_orders(
     assert row["canonical_work_order_id"] == "BASE001"
     assert row["complaint_fingerprint"]
     assert row["feature_json"]
-    assert row["feature_version"] == "feature-v2"
+    assert row["feature_version"] == FEATURE_VERSION
 
 
 def test_alembic_has_single_new_baseline_head() -> None:

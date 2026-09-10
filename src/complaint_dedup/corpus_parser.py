@@ -124,6 +124,12 @@ _WORK_ORDER_CONTEXT_RE = re.compile(
     r"(?:工单|单号|编号|此前|之前|历史|重复)[^\dA-Za-z]{0,8}"
     r"(?P<id>\d{16,24}(?:[A-Za-z]{1,4})?)"
 )
+# 标题二次抽取地点锚点：优先“道路+门牌/楼栋”，否则常见场所后缀
+_TITLE_LANDMARK_RE = re.compile(
+    r"[\u4e00-\u9fffA-Za-z0-9]{2,15}"
+    r"(?:小区|花园|大厦|广场|公寓|商城|市场|超市|公园|学校|医院|幼儿园|"
+    r"工业园|科技园|村|桥|车站|码头|酒店|宾馆|餐厅|工厂|工地|银行|景区)"
+)
 _OCCURRENCE_PATTERNS = (
     (
         "order",
@@ -292,6 +298,21 @@ def extract_organization_subjects(*texts: str | None) -> list[str]:
 def extract_organization_subject(*texts: str | None) -> str | None:
     candidates = extract_organization_subjects(*texts)
     return candidates[0] if candidates else None
+
+
+def extract_title_anchor(title: str | None) -> str | None:
+    """从标题二次抽取地点锚点，用于补足缺失的事发地点。"""
+    text = _clean_text(title)
+    if not text:
+        return None
+    road_match = _ROAD_HOUSE_RE.search(text)
+    if road_match:
+        return road_match.group(0)
+    building_match = _BUILDING_RE.search(text)
+    if building_match:
+        return building_match.group(0)
+    landmark = _TITLE_LANDMARK_RE.search(text)
+    return landmark.group(0) if landmark else None
 def parse_complaint(
     *, title: str | None, appeal: str | None, location: str | None
 ) -> ComplaintParseResult:

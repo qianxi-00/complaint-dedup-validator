@@ -1,7 +1,9 @@
-import json
-import re
 import asyncio
+import json
+import random
+import re
 import time
+from collections import Counter
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
@@ -11,6 +13,15 @@ from pydantic import BaseModel, ValidationError
 
 
 ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
+
+_THINK_BLOCK_RE = re.compile(
+    r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE
+)
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+_REPAIR_INSTRUCTION = (
+    "上一次输出无法解析为要求的 JSON（错误：{error}）。"
+    "请只输出修正后的 JSON 对象，不要输出解释、Markdown 代码围栏或思考过程。"
+)
 
 
 class LlmResponseError(RuntimeError):
@@ -32,6 +43,7 @@ class LlmClient:
         max_tokens: int = 4096,
         enable_thinking: bool = False,
         send_enable_thinking: bool = True,
+        json_mode: str = "prompt",
         concurrency: int = 2,
         max_connections: int = 24,
         max_keepalive_connections: int = 12,
@@ -44,6 +56,7 @@ class LlmClient:
         self._max_tokens = max_tokens
         self._enable_thinking = enable_thinking
         self._send_enable_thinking = send_enable_thinking
+        self._json_mode = json_mode
         self._semaphore = asyncio.Semaphore(concurrency)
         self._client = httpx.AsyncClient(
             base_url=f"{base_url.rstrip('/')}/",
@@ -55,26 +68,33 @@ class LlmClient:
             ),
             transport=transport,
         )
+        # 调用统计：requests/success/rate_limited/timeout/transport_error/http_error/invalid_output
+        self.stats: Counter[str] = Counter()
 
     async def chat_json(
         self,
         messages: Sequence[dict[str, str]],
         response_model: type[ResponseModel],
     ) -> ResponseModel:
+        base_messages = list(messages)
+        request_messages = base_messages
         last_error: Exception | None = None
         raw_response: str | None = None
         started = time.monotonic()
         async with self._semaphore:
             for attempt in range(self._max_retries):
+                response: httpx.Response | None = None
+                self.stats["requests"] += 1
                 try:
                     payload = {
                         "model": self._model,
-                        "messages": list(messages),
+                        "messages": list(request_messages),
                         "temperature": self._temperature,
                         "max_tokens": self._max_tokens,
                     }
                     if self._send_enable_thinking:
                         payload["enable_thinking"] = self._enable_thinking
+                    _apply_json_mode(payload, response_model, self._json_mode)
                     logger.debug(
                         "LLM 请求 model={} attempt={}/{} 批量大小={}",
                         self._model,
@@ -87,22 +107,71 @@ class LlmClient:
                         json=payload,
                     )
                     response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    raw_response = str(content)
-                    payload = json.loads(_strip_code_fence(content))
-                    result = response_model.model_validate(payload)
+                    data = response.json()
+                    choices = data.get("choices") or []
+                    message = (choices[0].get("message") if choices else {}) or {}
+                    content = message.get("content")
+                    if not content:
+                        # 部分思考型模型把有效内容放在 reasoning_content 字段
+                        content = message.get("reasoning_content")
+                    raw_response = str(content or "")
+                    parsed = json.loads(
+                        _strip_code_fence(_strip_thinking(raw_response))
+                    )
+                    result = response_model.model_validate(parsed)
+                    self.stats["success"] += 1
                     logger.info(
                         "LLM 调用成功 model={} attempt={} 决策数={} 耗时={:.1f}s",
                         self._model,
                         attempt + 1,
-                        len(getattr(result, "decisions", []) or []),
+                        len(getattr(result, "groups", []) or []),
                         time.monotonic() - started,
                     )
                     return result
-                except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as exc:
+                except (json.JSONDecodeError, ValidationError) as exc:
+                    # 无效输出：下一次尝试携带修复提示，而不是简单重发
+                    self.stats["invalid_output"] += 1
                     last_error = exc
-                    if isinstance(exc, httpx.HTTPStatusError):
-                        raw_response = exc.response.text
+                    request_messages = _repair_messages(
+                        base_messages, raw_response, exc
+                    )
+                    if attempt + 1 < self._max_retries:
+                        logger.warning(
+                            "LLM 输出无效,准备修复重试 model={} attempt={}/{} 类型={} 摘要={}",
+                            self._model,
+                            attempt + 1,
+                            self._max_retries,
+                            type(exc).__name__,
+                            str(exc)[:200],
+                        )
+                except httpx.TimeoutException as exc:
+                    self.stats["timeout"] += 1
+                    last_error = exc
+                    if attempt + 1 < self._max_retries:
+                        logger.warning(
+                            "LLM 请求超时,准备重试 model={} attempt={}/{}",
+                            self._model,
+                            attempt + 1,
+                            self._max_retries,
+                        )
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 429:
+                        self.stats["rate_limited"] += 1
+                    else:
+                        self.stats["http_error"] += 1
+                    last_error = exc
+                    raw_response = exc.response.text
+                    if attempt + 1 < self._max_retries:
+                        logger.warning(
+                            "LLM 调用失败,准备重试 model={} attempt={}/{} 状态码={}",
+                            self._model,
+                            attempt + 1,
+                            self._max_retries,
+                            exc.response.status_code,
+                        )
+                except (httpx.HTTPError, KeyError, TypeError) as exc:
+                    self.stats["transport_error"] += 1
+                    last_error = exc
                     if attempt + 1 < self._max_retries:
                         logger.warning(
                             "LLM 调用失败,准备重试 model={} attempt={}/{} 类型={} 摘要={}",
@@ -112,15 +181,17 @@ class LlmClient:
                             type(exc).__name__,
                             str(exc)[:200],
                         )
-                        await asyncio.sleep(_retry_delay(attempt, response if "response" in locals() else None))
+                if attempt + 1 < self._max_retries:
+                    await asyncio.sleep(_retry_delay(attempt, response))
         snippet = (raw_response or "")[:400].replace("\n", " ")
         logger.error(
-            "LLM 调用最终失败(已重试 {} 次) model={} 类型={} 错误={} 响应摘要={}",
+            "LLM 调用最终失败(已尝试 {} 次) model={} 类型={} 错误={} 响应摘要={} 统计={}",
             self._max_retries,
             self._model,
             type(last_error).__name__ if last_error else "-",
             str(last_error)[:200],
             snippet,
+            dict(self.stats),
         )
         raise LlmResponseError(
             "模型响应无法通过结构化校验", raw_response=raw_response
@@ -170,16 +241,50 @@ def build_llm_client(
         max_tokens=settings.llm_max_tokens,
         enable_thinking=settings.llm_enable_thinking,
         send_enable_thinking=settings.llm_send_enable_thinking,
+        json_mode=settings.llm_json_mode,
         concurrency=resolved_concurrency,
         max_connections=max_connections,
         max_keepalive_connections=max_keepalive_connections,
     )
 
 
+def _apply_json_mode(
+    payload: dict[str, Any],
+    response_model: type[BaseModel],
+    json_mode: str,
+) -> None:
+    if json_mode == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    elif json_mode == "guided_json":
+        payload["guided_json"] = response_model.model_json_schema()
+
+
+def _strip_thinking(content: Any) -> str:
+    text = _THINK_BLOCK_RE.sub("", str(content or "")).strip()
+    return text
+
+
 def _strip_code_fence(content: Any) -> str:
     text = str(content).strip()
-    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    match = _CODE_FENCE_RE.fullmatch(text)
     return match.group(1) if match else text
+
+
+def _repair_messages(
+    base_messages: list[dict[str, str]],
+    raw_response: str | None,
+    error: Exception,
+) -> list[dict[str, str]]:
+    snippet = (raw_response or "").strip()[:2000]
+    return list(base_messages) + [
+        {"role": "assistant", "content": snippet},
+        {
+            "role": "user",
+            "content": _REPAIR_INSTRUCTION.format(
+                error=f"{type(error).__name__}: {str(error)[:300]}"
+            ),
+        },
+    ]
 
 
 def _retry_delay(attempt: int, response: httpx.Response | None) -> float:
@@ -190,4 +295,5 @@ def _retry_delay(attempt: int, response: httpx.Response | None) -> float:
                 return max(float(retry_after), 0.0)
             except ValueError:
                 pass
-    return min(2**attempt, 8) * 0.25
+    base = min(2**attempt, 8) * 0.25
+    return base + random.uniform(0, 0.25)

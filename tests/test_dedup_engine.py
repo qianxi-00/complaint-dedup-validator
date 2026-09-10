@@ -1,13 +1,17 @@
 from datetime import date
 import json
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
+from complaint_dedup.dedup_engine import _features_conflict
+
 from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.corpus_models import InputRecord
 from complaint_dedup.corpus_schema import comparison_decisions, comparison_runs
+from complaint_dedup.dedup_features import FEATURE_VERSION
 from complaint_dedup.full_corpus import FullCorpusService
 from complaint_dedup.llm_models import (
     EventCardBatchResponse,
@@ -168,8 +172,8 @@ async def test_hbd_derived_orders_are_hard_merged(database):
         ).mappings().one()
     assert audit_count >= 1
     assert run["algorithm_version"] == "event-key-v3"
-    assert run["feature_version"] == "feature-v2"
-    assert run["prompt_version"] == "event-card-v1"
+    assert run["feature_version"] == FEATURE_VERSION
+    assert run["prompt_version"] == "event-card-v2"
 
 
 @pytest.mark.asyncio
@@ -510,3 +514,223 @@ async def test_large_candidate_bucket_does_not_lose_records(database):
             )
         ).scalars().all()
     assert "model_assignment" in decisions
+
+
+@pytest.mark.asyncio
+async def test_category_variants_of_same_family_are_merged(database):
+    service = FullCorpusService(database)
+    location = "江海区江南街道金瓯路105号明泰城"
+    await service.sync_records(
+        [
+            make_record(
+                "FAMILY-A",
+                title="明泰城物业费过高",
+                appeal="地址：江海区江南街道金瓯路105号明泰城。事项：物业费2.4元过高。",
+                category="物业费定价过高",
+                location=location,
+            ),
+            make_record(
+                "FAMILY-B",
+                title="明泰城物业服务质价不符",
+                appeal="地址：江海区江南街道金瓯路105号明泰城。事项：物业服务质价不符。",
+                category="（江海）物业服务纠纷",
+                location=location,
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_different_problem_families_at_same_place_stay_separate(database):
+    service = FullCorpusService(database)
+    location = "江海区江南街道金瓯路105号明泰城"
+    await service.sync_records(
+        [
+            make_record(
+                "FAM-A",
+                title="明泰城物业服务问题",
+                appeal="地址：江海区江南街道金瓯路105号明泰城。事项：物业服务不到位。",
+                category="物业服务纠纷",
+                location=location,
+            ),
+            make_record(
+                "FAM-B",
+                title="明泰城夜间噪音",
+                appeal="地址：江海区江南街道金瓯路105号明泰城。事项：夜间施工噪音扰民。",
+                category="生活噪音",
+                location=location,
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_follow_up_order_referencing_previous_is_merged(database):
+    service = FullCorpusService(database)
+    location = "江海区礼乐街道东宁路1号"
+    await service.sync_records(
+        [
+            make_record(
+                "0826010100000000001",
+                title="东宁路路灯不亮",
+                appeal="地址：江海区礼乐街道东宁路1号。事项：路灯连续多日不亮。",
+                category="路灯故障",
+                location=location,
+            ),
+            make_record(
+                "0826020200000000002",
+                title="再次反映东宁路路灯未修复",
+                appeal=(
+                    "地址：江海区礼乐街道东宁路1号。事项：此前工单"
+                    "0826010100000000001反映的路灯问题仍未修复，请尽快处理。"
+                ),
+                category="道路照明",
+                location=location,
+                received="2026-09-03 08:00:00",
+                completed="2026-09-03 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 3),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_appeal_with_different_titles_is_merged(database):
+    service = FullCorpusService(database)
+    location = "江海区礼乐街道东宁路8号"
+    shared_appeal = (
+        "地址：江海区礼乐街道东宁路8号。事项：市民反映该处商铺长期占道经营，"
+        "影响行人通行，要求尽快处理并加强日常巡查管理。"
+    )
+    await service.sync_records(
+        [
+            make_record(
+                "APPEAL-A",
+                title="东宁路8号占道经营投诉",
+                appeal=shared_appeal,
+                category="占道经营",
+                location=location,
+            ),
+            make_record(
+                "APPEAL-B",
+                title="请求处理东宁路商铺摆卖问题",
+                appeal=shared_appeal,
+                category="占道经营",
+                location=location,
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_time_span_guard_counts_then_blocks(database):
+    location = "江海区江南街道金瓯路105号明泰城"
+
+    async def run(shadow: bool):
+        service = FullCorpusService(
+            database, settings=SimpleNamespace(dedup_fallback_span_shadow=shadow)
+        )
+        await service.sync_records(
+            [
+                make_record(
+                    "SPAN-A",
+                    title="明泰城物业管理问题A",
+                    appeal="地址：江海区江南街道金瓯路105号明泰城。事项：物业管理问题。",
+                    category="物业服务纠纷",
+                    location=location,
+                    received="2026-01-05 08:00:00",
+                    completed="2026-01-05 10:00:00",
+                ),
+                make_record(
+                    "SPAN-B",
+                    title="明泰城物业管理问题B",
+                    appeal="地址：江海区江南街道金瓯路105号明泰城。事项：保洁不到位。",
+                    category="物业服务纠纷",
+                    location=location,
+                    received="2026-08-05 08:00:00",
+                    completed="2026-08-05 10:00:00",
+                ),
+            ],
+            file_name="all.xlsx",
+        )
+        return await service.compare(
+            time_field="completed_at",
+            target_from=date(2026, 1, 1),
+            target_to=date(2026, 8, 31),
+        )
+
+    shadowed = await run(shadow=True)
+    assert shadowed.span_guard_count >= 1
+    shadow_events = await FullCorpusService(database).list_comparison_events(
+        shadowed.comparison_id
+    )
+    assert len(shadow_events) == 1
+
+    enforced = await run(shadow=False)
+    assert enforced.span_guard_count >= 1
+    enforced_events = await FullCorpusService(database).list_comparison_events(
+        enforced.comparison_id
+    )
+    assert len(enforced_events) == 2
+
+
+def test_unknown_street_is_treated_as_missing() -> None:
+    left = {"street": "未知街道", "strong_subjects": [], "occurrence_ids": [], "location_keys": []}
+    right = {"street": "外海街道", "strong_subjects": [], "occurrence_ids": [], "location_keys": []}
+
+    assert _features_conflict(left, right) is False
+
+
+def test_subject_alias_variants_do_not_conflict() -> None:
+    left = {"strong_subjects": ["安波福电气系统"], "occurrence_ids": [], "location_keys": []}
+    right = {"strong_subjects": ["安波福电器系统"], "occurrence_ids": [], "location_keys": []}
+
+    assert _features_conflict(left, right) is False

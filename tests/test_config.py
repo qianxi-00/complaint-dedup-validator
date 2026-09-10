@@ -31,19 +31,24 @@ def test_settings_load_active_defaults() -> None:
     assert settings.llm_api_key == ""
     assert settings.llm_model == ""
     assert settings.llm_concurrency == 8
-    assert settings.llm_timeout_seconds == 180
+    assert settings.llm_timeout_seconds == 200
     assert settings.llm_max_retries == 3
     assert settings.llm_temperature == 0
     assert settings.llm_max_tokens == 4096
     assert settings.llm_enable_thinking is False
     assert settings.llm_send_enable_thinking is True
+    assert settings.llm_json_mode == "prompt"
     assert settings.dedup_llm_enabled is True
     assert settings.dedup_max_candidates == 30
     assert settings.dedup_cards_per_batch == 16
-    assert settings.dedup_max_requests == 400
+    assert settings.dedup_max_requests == 0
     assert settings.dedup_max_concurrency == 8
-    assert settings.dedup_max_seconds == 1800
+    assert settings.dedup_max_seconds == 0
     assert settings.dedup_min_confidence == 0.7
+    assert settings.dedup_text_duplicate_enabled is True
+    assert settings.dedup_text_duplicate_threshold == 0.9
+    assert settings.dedup_fallback_max_span_days == 90
+    assert settings.dedup_fallback_span_shadow is True
 
 
 @pytest.mark.parametrize(

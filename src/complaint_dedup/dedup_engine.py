@@ -19,20 +19,24 @@ from complaint_dedup.dedup_features import (
     RecordFeatures,
     build_record_features,
     normalize_feature_text,
+    normalize_subject_for_match,
+    normalize_work_order_id,
     sanitize_for_model,
 )
 from complaint_dedup.llm_models import EventCardBatchResponse
 
 ALGORITHM_VERSION = "event-key-v3"
-PROMPT_VERSION = "event-card-v1"
+PROMPT_VERSION = "event-card-v2"
 SYSTEM_PROMPT = """你是投诉工单判重专家。你只判断输入事件卡是否属于同一具体投诉事件或同一处置链。
 必须遵守：
 1. 仅因地区、街道、事项大类或电话相同，不得判为同一事件。
 2. 同一主体、同一具体问题对象且没有硬冲突时，可以判为同一事件。
 3. 明确不同的订单、门牌、楼栋、房间、商品、被投诉对象或核心事实，必须拆分。
-4. 证据不足时放入 unresolved_card_ids，不得猜测。
-5. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
-6. 每个 card_id 最多出现在一个分组中。
+4. 同一企业、同一问题族（如欠薪、食品安全、产品质量）的投诉，即使由不同人、不同月份提出，也视为同一事件。
+5. 瞬时事项（噪音、占道、交通、单一故障）时间接近是重要的合并证据；持续事项（欠薪、物业、食品、产品质量）可以跨月，以主体和问题对象为准。
+6. 证据不足时放入 unresolved_card_ids，不得猜测。
+7. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
+8. 每个 card_id 最多出现在一个分组中。
 输出必须严格使用以下结构，不得省略键：
 {
   "groups": [
@@ -66,13 +70,17 @@ class DedupEngineOptions:
     llm_enabled: bool = True
     max_candidates: int = 30
     max_cards_per_batch: int = 16
-    max_requests: int = 400
+    max_requests: int = 0
     max_concurrency: int = 8
-    max_seconds: float = 1800
+    max_seconds: float = 0
     min_confidence: float = 0.7
     candidate_score_threshold: float = 45.0
     assignment_score_threshold: float = 55.0
     model_review_score_threshold: float = 65.0
+    text_duplicate_enabled: bool = True
+    text_duplicate_threshold: float = 0.9
+    fallback_max_span_days: int = 90
+    fallback_span_shadow: bool = True
 
     @classmethod
     def from_settings(cls, settings: Any | None) -> "DedupEngineOptions":
@@ -85,15 +93,27 @@ class DedupEngineOptions:
             max_cards_per_batch=int(
                 getattr(settings, "dedup_cards_per_batch", 16)
             ),
-            max_requests=int(getattr(settings, "dedup_max_requests", 400)),
+            max_requests=int(getattr(settings, "dedup_max_requests", 0)),
             max_concurrency=int(
                 getattr(settings, "dedup_max_concurrency", 8)
             ),
             max_seconds=float(
-                getattr(settings, "dedup_max_seconds", 1800)
+                getattr(settings, "dedup_max_seconds", 0)
             ),
             min_confidence=float(
                 getattr(settings, "dedup_min_confidence", 0.7)
+            ),
+            text_duplicate_enabled=bool(
+                getattr(settings, "dedup_text_duplicate_enabled", True)
+            ),
+            text_duplicate_threshold=float(
+                getattr(settings, "dedup_text_duplicate_threshold", 0.9)
+            ),
+            fallback_max_span_days=int(
+                getattr(settings, "dedup_fallback_max_span_days", 90)
+            ),
+            fallback_span_shadow=bool(
+                getattr(settings, "dedup_fallback_span_shadow", True)
             ),
         )
 
@@ -109,6 +129,9 @@ class DedupResult:
     llm_coverage: float
     fallback_count: int
     decision_count: int
+    request_count: int = 0
+    llm_error_count: int = 0
+    span_guard_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -173,6 +196,8 @@ class DedupEngine:
         self.llm_client = llm_client
         self.options = options or DedupEngineOptions()
         self._request_count = 0
+        self._llm_error_count = 0
+        self._span_guard_count = 0
         self._covered_records = 0
         self._started_at = time.monotonic()
 
@@ -367,6 +392,7 @@ class DedupEngine:
                 )
             return response, int((time.monotonic() - started) * 1000), None
         except Exception as exc:
+            self._llm_error_count += 1
             logger.warning(
                 "事件卡模型裁决失败，自动降级：类型={} 摘要={}",
                 type(exc).__name__,
@@ -480,6 +506,8 @@ class DedupEngine:
                 if not card.legacy_keys & group_keys[index]:
                     continue
                 if all(not _pair_conflict(card, member) for member in group):
+                    if self._time_span_guard_blocks(card, group):
+                        continue
                     target_index = index
                     break
             if target_index is None:
@@ -558,12 +586,63 @@ class DedupEngine:
                 in {
                     "hard_merge",
                     "rule_merge",
+                    "text_duplicate",
                     "model_merge",
                     "model_assignment",
                     "rule_fallback",
                 }
             ),
+            request_count=self._request_count,
+            llm_error_count=self._llm_error_count,
+            span_guard_count=self._span_guard_count,
         )
+
+    def _time_span_guard_blocks(
+        self, card: EventCard, group: list[EventCard]
+    ) -> bool:
+        """回退合并的时间跨度护栏。
+
+        企业问题族按“同一企业=同一事件”处理，不适用护栏；
+        普通键合并跨度超过阈值且无强证据时拦截。
+        shadow 模式只计数不拦截，便于先观察影响。
+        """
+        max_days = self.options.fallback_max_span_days
+        if max_days <= 0:
+            return False
+        if any(key.startswith("enterprise|") for key in card.legacy_keys):
+            return False
+        if self._has_strong_identity(card, group):
+            return False
+        span = _group_span_days([*group, card])
+        if span is None or span <= max_days:
+            return False
+        self._span_guard_count += 1
+        return not self.options.fallback_span_shadow
+
+    @staticmethod
+    def _has_strong_identity(card: EventCard, group: list[EventCard]) -> bool:
+        for member in group:
+            if _intersects(
+                card.features.get("canonical_work_order_id"),
+                member.features.get("canonical_work_order_id"),
+            ):
+                return True
+            if _intersects(
+                card.features.get("complaint_fingerprint"),
+                member.features.get("complaint_fingerprint"),
+            ):
+                return True
+            if _intersects(
+                card.features.get("appeal_fingerprint"),
+                member.features.get("appeal_fingerprint"),
+            ):
+                return True
+            if _set_intersection(
+                card.features.get("occurrence_ids"),
+                member.features.get("occurrence_ids"),
+            ):
+                return True
+        return False
 
     def _request_limit_reached(self) -> bool:
         return (
@@ -630,12 +709,17 @@ def _build_event_cards(records: list[PreparedRecord]) -> list[EventCard]:
     finder = _UnionFind(len(records))
     canonical_index: dict[str, list[int]] = defaultdict(list)
     fingerprint_index: dict[str, list[int]] = defaultdict(list)
+    appeal_index: dict[str, list[int]] = defaultdict(list)
     occurrence_index: dict[str, list[int]] = defaultdict(list)
+    work_order_index: dict[str, list[int]] = defaultdict(list)
     for index, record in enumerate(records):
         if record.features.canonical_work_order_id:
             canonical_index[record.features.canonical_work_order_id].append(index)
+            work_order_index[record.features.canonical_work_order_id].append(index)
         if record.features.complaint_fingerprint:
             fingerprint_index[record.features.complaint_fingerprint].append(index)
+        if record.features.appeal_fingerprint:
+            appeal_index[record.features.appeal_fingerprint].append(index)
         for occurrence in record.features.occurrence_ids:
             occurrence_index[occurrence].append(index)
     for indexes in canonical_index.values():
@@ -646,10 +730,23 @@ def _build_event_cards(records: list[PreparedRecord]) -> list[EventCard]:
         for group in _compatible_index_groups(indexes, records):
             for index in group[1:]:
                 _safe_union(finder, records, group[0], index)
+    for indexes in appeal_index.values():
+        for group in _compatible_index_groups(indexes, records):
+            for index in group[1:]:
+                _safe_union(finder, records, group[0], index)
     for indexes in occurrence_index.values():
         for group in _compatible_index_groups(indexes, records):
             for index in group[1:]:
                 _safe_union(finder, records, group[0], index)
+    # 跟进单/复查单：诉求中引用的历史工单号指向库内工单时合并
+    for index, record in enumerate(records):
+        for previous in record.features.previous_work_order_ids:
+            previous_norm = normalize_work_order_id(previous)
+            if not previous_norm:
+                continue
+            for other in work_order_index.get(previous_norm, []):
+                if other != index:
+                    _safe_union(finder, records, index, other)
 
     clusters = [[records[index] for index in indexes] for indexes in finder.grouped()]
     clusters.sort(key=lambda group: min(str(record.row["record_key"]) for record in group))
@@ -830,11 +927,15 @@ def _candidate_keys(card: EventCard) -> set[str]:
         keys.add(f"canonical:{canonical}")
     if fingerprint:
         keys.add(f"fingerprint:{fingerprint}")
+    appeal = features.get("appeal_fingerprint")
+    if appeal:
+        keys.add(f"appeal:{appeal}")
     for occurrence in features.get("occurrence_ids") or []:
         keys.add(f"occurrence:{occurrence}")
     street = features.get("street")
-    family = features.get("issue_family")
-    for subject in features.get("subjects") or []:
+    family = features.get("problem_family") or features.get("issue_family")
+    subjects = features.get("strong_subjects") or features.get("subjects") or []
+    for subject in subjects:
         if family:
             keys.add(f"subject-family:{street}:{subject}:{family}")
     for location in features.get("location_keys") or []:
@@ -866,12 +967,17 @@ def _card_score(left: EventCard, right: EventCard) -> float:
         right_features.get("complaint_fingerprint"),
     ):
         score += 95
+    if _intersects(
+        left_features.get("appeal_fingerprint"),
+        right_features.get("appeal_fingerprint"),
+    ):
+        score += 90
     if _set_intersection(
         left_features.get("occurrence_ids"), right_features.get("occurrence_ids")
     ):
         score += 90
-    for left_subject in left_features.get("subjects") or []:
-        for right_subject in right_features.get("subjects") or []:
+    for left_subject in left_features.get("strong_subjects") or left_features.get("subjects") or []:
+        for right_subject in right_features.get("strong_subjects") or right_features.get("subjects") or []:
             if _subjects_match(left_subject, right_subject):
                 score += 75
                 break
@@ -901,18 +1007,21 @@ def _pair_has_merge_evidence(left: EventCard, right: EventCard) -> bool:
         right.features.get("complaint_fingerprint"),
     ):
         return True
+    if _intersects(
+        left.features.get("appeal_fingerprint"),
+        right.features.get("appeal_fingerprint"),
+    ):
+        return True
     if _set_intersection(
         left.features.get("occurrence_ids"), right.features.get("occurrence_ids")
     ):
         return True
-    for left_subject in left.features.get("subjects") or []:
-        for right_subject in right.features.get("subjects") or []:
+    for left_subject in left.features.get("strong_subjects") or left.features.get("subjects") or []:
+        for right_subject in right.features.get("strong_subjects") or right.features.get("subjects") or []:
             if _subjects_match(left_subject, right_subject):
-                if (
-                    left.features.get("issue_family")
-                    and left.features.get("issue_family")
-                    == right.features.get("issue_family")
-                ):
+                left_family = left.features.get("problem_family") or left.features.get("issue_family")
+                right_family = right.features.get("problem_family") or right.features.get("issue_family")
+                if left_family and left_family == right_family:
                     return True
     if _set_intersection(
         left.features.get("location_keys"), right.features.get("location_keys")
@@ -991,16 +1100,28 @@ def _pair_conflict(left: EventCard, right: EventCard) -> bool:
     return _features_conflict(left.features, right.features)
 
 
+_UNKNOWN_VALUES = frozenset(
+    {"", "未知地点", "未知街道", "未知", "不详", "无", "其他", "其它", "-", "--"}
+)
+
+
+def _known_value(value: Any) -> str:
+    """把“未知/空”占位统一视为缺失，返回空字符串。"""
+    text = str(value or "").strip()
+    return "" if text in _UNKNOWN_VALUES else text
+
+
 def _features_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if left.get("issue_family") and right.get("issue_family"):
         if left["issue_family"] != right["issue_family"]:
             return True
-    left_street = str(left.get("street") or "").strip()
-    right_street = str(right.get("street") or "").strip()
+    # “未知街道/未知地点”等占位值视为缺失，不参与冲突判定
+    left_street = _known_value(left.get("street"))
+    right_street = _known_value(right.get("street"))
     if left_street and right_street and left_street != right_street:
         return True
-    left_subjects = [str(value) for value in (left.get("subjects") or [])]
-    right_subjects = [str(value) for value in (right.get("subjects") or [])]
+    left_subjects = [str(value) for value in (left.get("strong_subjects") or [])]
+    right_subjects = [str(value) for value in (right.get("strong_subjects") or [])]
     if left_subjects and right_subjects and not any(
         _subjects_match(a, b) for a in left_subjects for b in right_subjects
     ):
@@ -1206,15 +1327,18 @@ def _issue_text(card: EventCard) -> str:
 
 
 def _subjects_match(left: str | None, right: str | None) -> bool:
-    left_text = normalize_feature_text(left)
-    right_text = normalize_feature_text(right)
+    """主体模糊匹配：归一化相等、包含关系或字符 3-gram 相似度达标。"""
+    left_text = normalize_subject_for_match(left)
+    right_text = normalize_subject_for_match(right)
     if not left_text or not right_text:
         return False
     if left_text == right_text:
         return True
-    return min(len(left_text), len(right_text)) >= 4 and (
+    if min(len(left_text), len(right_text)) >= 3 and (
         left_text in right_text or right_text in left_text
-    )
+    ):
+        return True
+    return _text_similarity(left_text, right_text) >= 0.85
 
 
 def _time_bonus(left: EventCard, right: EventCard) -> float:
@@ -1234,6 +1358,22 @@ def _time_bonus(left: EventCard, right: EventCard) -> float:
         ),
     )
     return max(0.0, 10.0 - distance / 30)
+
+
+def _group_span_days(cards: list[EventCard]) -> int | None:
+    """事件卡组内最早到最晚时间的跨度（天）；不足两条日期时返回 None。"""
+    dates: list[date] = []
+    for card in cards:
+        bounds = card.features.get("time_bounds") or []
+        if len(bounds) != 2:
+            continue
+        for value in bounds:
+            parsed = _parse_date(value)
+            if parsed:
+                dates.append(parsed)
+    if len(dates) < 2:
+        return None
+    return (max(dates) - min(dates)).days
 
 
 def _time_bounds(records: list[PreparedRecord]) -> tuple[str | None, str | None]:
@@ -1306,7 +1446,7 @@ def _hard_merge_audits(
             [card],
             decision="hard_merge",
             confidence=1,
-            evidence_json=[{"field": "hard_identity", "cards": [card.card_id], "reason": "基础工单号、完整内容指纹或发生对象硬匹配"}],
+            evidence_json=[{"field": "hard_identity", "cards": [card.card_id], "reason": "基础工单号、内容/正文指纹、发生对象或历史工单号硬匹配"}],
             conflict_json=[],
             fallback_reason=None,
             elapsed_ms=None,

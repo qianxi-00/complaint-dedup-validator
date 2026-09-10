@@ -119,6 +119,9 @@ class FullCorpusWorker:
                     "llm_coverage": result.llm_coverage,
                     "fallback_count": result.fallback_count,
                     "decision_count": result.decision_count,
+                    "request_count": result.request_count,
+                    "llm_error_count": result.llm_error_count,
+                    "span_guard_count": result.span_guard_count,
                 }
             raise ValueError("后台任务类型无效")
         finally:

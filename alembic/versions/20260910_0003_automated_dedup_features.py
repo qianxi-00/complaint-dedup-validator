@@ -34,7 +34,7 @@ def upgrade() -> None:
             sa.Column(
                 "complaint_fingerprint",
                 sa.String(64),
-                comment="标题、诉求和地点的完整内容指纹",
+                comment="标题与诉求正文的完整内容指纹（不含地点，feature-v3）",
             ),
         ),
         (
@@ -251,7 +251,7 @@ def _backfill_work_order_features(bind) -> None:
 def _apply_comments() -> None:
     comments = {
         ("work_orders", "canonical_work_order_id"): "去除 HBD 等转派后缀后的基础工单编号",
-        ("work_orders", "complaint_fingerprint"): "标题、诉求和地点的完整内容指纹",
+        ("work_orders", "complaint_fingerprint"): "标题与诉求正文的完整内容指纹（不含地点，feature-v3）",
         ("work_orders", "feature_json"): "主体、地址、事项、发生对象等判重特征 JSON",
         ("work_orders", "feature_version"): "判重特征规则版本",
         ("comparison_runs", "algorithm_version"): "本次任务使用的判重算法版本",
