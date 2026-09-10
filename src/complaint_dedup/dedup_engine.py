@@ -549,16 +549,25 @@ class DedupEngine:
         self, records: list[PreparedRecord]
     ) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
         cards = _build_event_cards(records)
-        grouped_cards, card_audits = self._fallback_card_groups(
-            cards, reason="未启用模型，沿用现行保守规则"
-        )
-        groups = [
+        grouped_cards: list[list[EventCard]] = []
+        audits = _hard_merge_audits(cards, self.options)
+        # 无模型时也先做候选召回与确定性规则合并（文本近重复、同主体问题族等），
+        # 再对规则无法判定的组件使用保守回退，避免“无模型必然过粗”。
+        for component in _candidate_components(cards, self.options):
+            if _component_rule_safe(component):
+                grouped_cards.append(component)
+                audits.extend(_rule_merge_audits(component, self.options))
+            else:
+                groups, card_audits = self._fallback_card_groups(
+                    component, reason="未启用模型，沿用现行保守规则"
+                )
+                grouped_cards.extend(groups)
+                audits.extend(card_audits)
+        result_groups = [
             [record.row for card in group for record in card.records]
             for group in grouped_cards
         ]
-        audits = _hard_merge_audits(cards, self.options)
-        audits.extend(card_audits)
-        return groups, audits
+        return result_groups, audits
 
     def _result(
         self,
@@ -712,6 +721,7 @@ def _build_event_cards(records: list[PreparedRecord]) -> list[EventCard]:
     appeal_index: dict[str, list[int]] = defaultdict(list)
     occurrence_index: dict[str, list[int]] = defaultdict(list)
     work_order_index: dict[str, list[int]] = defaultdict(list)
+    enterprise_index: dict[tuple[str, str], list[int]] = defaultdict(list)
     for index, record in enumerate(records):
         if record.features.canonical_work_order_id:
             canonical_index[record.features.canonical_work_order_id].append(index)
@@ -722,6 +732,15 @@ def _build_event_cards(records: list[PreparedRecord]) -> list[EventCard]:
             appeal_index[record.features.appeal_fingerprint].append(index)
         for occurrence in record.features.occurrence_ids:
             occurrence_index[occurrence].append(index)
+        # 企业问题族：同一企业主体 + 同一问题族 = 同一事件（业务确认口径）
+        family = record.mapping.get("issue_family")
+        if family:
+            for subject in (
+                record.features.strong_subjects or record.features.subjects
+            ):
+                key = _enterprise_subject_key(subject)
+                if key:
+                    enterprise_index[(key, str(family))].append(index)
     for indexes in canonical_index.values():
         first = indexes[0]
         for index in indexes[1:]:
@@ -738,6 +757,17 @@ def _build_event_cards(records: list[PreparedRecord]) -> list[EventCard]:
         for group in _compatible_index_groups(indexes, records):
             for index in group[1:]:
                 _safe_union(finder, records, group[0], index)
+    for (subject_key, family), indexes in enterprise_index.items():
+        if family == "wage":
+            # 已确认业务口径：同一企业不同员工/月份的欠薪 = 同一事件，无条件合并
+            first = indexes[0]
+            for index in indexes[1:]:
+                finder.union(first, index)
+        else:
+            # 其他企业问题族保留冲突安全：仅合并两两无冲突的组
+            for group in _compatible_index_groups(indexes, records):
+                for index in group[1:]:
+                    _safe_union(finder, records, group[0], index)
     # 跟进单/复查单：诉求中引用的历史工单号指向库内工单时合并
     for index, record in enumerate(records):
         for previous in record.features.previous_work_order_ids:
@@ -1109,6 +1139,22 @@ def _known_value(value: Any) -> str:
     """把“未知/空”占位统一视为缺失，返回空字符串。"""
     text = str(value or "").strip()
     return "" if text in _UNKNOWN_VALUES else text
+
+
+_COMPANY_SPLIT_RE = re.compile(
+    r"^(.*?)(?:股份有限公司|有限责任公司|有限公司|集团公司|分公司|分厂)"
+)
+
+
+def _enterprise_subject_key(value: str | None) -> str:
+    """企业主体键：别名归一后取公司后缀之前的核心名称，便于跨网点归一。"""
+    text = normalize_subject_for_match(value)
+    if not text:
+        return ""
+    match = _COMPANY_SPLIT_RE.match(text)
+    if match and len(match.group(1)) >= 2:
+        return match.group(1)
+    return text
 
 
 def _features_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:

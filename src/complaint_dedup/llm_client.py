@@ -17,6 +17,7 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 _THINK_BLOCK_RE = re.compile(
     r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE
 )
+_THINK_TAG_RE = re.compile(r"</?think(?:ing)?[^>]*>", re.IGNORECASE)
 _CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 _REPAIR_INSTRUCTION = (
     "上一次输出无法解析为要求的 JSON（错误：{error}）。"
@@ -260,8 +261,10 @@ def _apply_json_mode(
 
 
 def _strip_thinking(content: Any) -> str:
-    text = _THINK_BLOCK_RE.sub("", str(content or "")).strip()
-    return text
+    text = _THINK_BLOCK_RE.sub("", str(content or ""))
+    # 部分思考型模型会遗留未配对的 <｜end▁of▁thinking｜> 等标签，单独清理
+    text = _THINK_TAG_RE.sub("", text)
+    return text.strip()
 
 
 def _strip_code_fence(content: Any) -> str:

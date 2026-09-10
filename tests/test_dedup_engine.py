@@ -722,6 +722,77 @@ async def test_time_span_guard_counts_then_blocks(database):
     assert len(enforced_events) == 2
 
 
+@pytest.mark.asyncio
+async def test_same_enterprise_wage_orders_are_merged(database):
+    service = FullCorpusService(database)
+    await service.sync_records(
+        [
+            make_record(
+                "ENT-WAGE-A",
+                title="江海区外海街道云沁路86号安波福电气系统有限公司江门分厂拖欠工资的问题",
+                appeal="地址：江海区外海街道云沁路86号安波福电气系统有限公司江门分厂。事项：员工甲被拖欠工资。",
+                category="拖欠、克扣工资",
+                location="江海区外海街道云沁路86号安波福电气系统有限公司江门分厂",
+            ),
+            make_record(
+                "ENT-WAGE-B",
+                title="江海区外海街道云沁路86号安波福电气系统有限公司江门分公司拖欠工资的问题",
+                appeal="地址：江海区外海街道云沁路86号安波福电气系统有限公司江门分公司。事项：员工乙被拖欠工资。",
+                category="（江海）拖欠、克扣工资",
+                location="江海区外海街道云沁路86号安波福电气系统有限公司江门分公司",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_subject_outside_enterprise_families_is_not_force_merged(database):
+    service = FullCorpusService(database)
+    await service.sync_records(
+        [
+            make_record(
+                "ENT-CONSUMER-A",
+                title="江海区礼乐街道五邑路119号1幢江门市裕立汽车销售服务有限公司的消费纠纷",
+                appeal="地址：江海区礼乐街道五邑路119号1幢江门市裕立汽车销售服务有限公司。事项：购车纠纷。",
+                category="消费纠纷",
+                location="江海区礼乐街道五邑路119号1幢江门市裕立汽车销售服务有限公司",
+            ),
+            make_record(
+                "ENT-CONSUMER-B",
+                title="江海区礼乐街道五邑路200号江门市裕立汽车销售服务有限公司的消费纠纷",
+                appeal="地址：江海区礼乐街道五邑路200号江门市裕立汽车销售服务有限公司。事项：退款纠纷。",
+                category="消费纠纷",
+                location="江海区礼乐街道五邑路200号江门市裕立汽车销售服务有限公司",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 2
+
+
 def test_unknown_street_is_treated_as_missing() -> None:
     left = {"street": "未知街道", "strong_subjects": [], "occurrence_ids": [], "location_keys": []}
     right = {"street": "外海街道", "strong_subjects": [], "occurrence_ids": [], "location_keys": []}

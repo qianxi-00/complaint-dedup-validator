@@ -61,6 +61,13 @@ Use `pytest` with explicit `@pytest.mark.asyncio` for async tests and per-file `
 - Web route contracts: `tests/test_full_corpus_web.py`.
 - Schema and migrations: `tests/test_migrations.py` and `tests/test_database_initialization.py`. Schema changes require a migration test, a fresh SQLite upgrade check, and a single Alembic head.
 
+## Dedup Evaluation
+
+- Rebuild the frozen set from a local database: `uv run python scripts/build_eval_set.py --db runtime/<db>.db --source-xlsx "<原始全量文件>.xlsx"`.
+- Deterministic (no model) metrics: `uv run python scripts/eval_dedup.py --dataset tests/fixtures/dedup_eval --no-llm`; add `--compare <previous.json>` for before/after tables.
+- Baseline report: `docs/判重评估报告-基线-v3.0.md`. Any dedup behavior change must rerun the evaluation and add a matching regression test; thresholds are enforced by `tests/test_dedup_eval.py`.
+- Never fabricate code versions, model parameters, vLLM details, or case IDs. Unverifiable facts must be recorded as `不可核验`; case IDs must come from the frozen dataset or the database.
+
 ## Commits and Pull Requests
 
 Use concise Conventional Commit messages such as `feat: add full corpus window comparison` or `fix: reject overlapping comparison windows`. Pull requests should describe data-model changes, deployment impact, authorization/PyArmor implications, and verification commands. Never commit `.env` files, credentials, customer spreadsheets, exports, or runtime databases.

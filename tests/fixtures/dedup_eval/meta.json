@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-09-10T10:07:15.545557+00:00",
+  "seed": 20260910,
+  "database": {
+    "path": "runtime\\local-test-20260910.db",
+    "size_bytes": 851574784,
+    "mtime": 1789024274.9547107,
+    "sha256": "68eabb76857ceaf4745ebd1ef4bce496d0c98863c6771a3287318d44200a881a"
+  },
+  "comparison": {
+    "id": "62a25e3d14714ac18867e00c650f09a7",
+    "algorithm_version": "event-key-v3",
+    "feature_version": "feature-v2",
+    "prompt_version": "event-card-v1",
+    "model_id": "grok-4.6",
+    "target_count": 1821,
+    "reference_count": 21654,
+    "event_count": 19246,
+    "singleton_count": 16945,
+    "llm_coverage": 0.4863045793397231,
+    "fallback_count": 3176,
+    "decision_count": 2514,
+    "created_at": "2026-09-10 06:57:08.480277"
+  },
+  "target_records": 1200,
+  "record_count": 1118,
+  "strata_counts": {
+    "random": 150,
+    "missed_merge": 200,
+    "fallback_event": 163,
+    "hard_event": 260,
+    "unknown_anchor": 150,
+    "HBD": 151,
+    "large_event": 65
+  },
+  "pair_count": 914,
+  "labeled_pair_count": 573,
+  "review_queue_count": 341,
+  "label_counts": {
+    "same": 339,
+    "uncertain": 341,
+    "different": 234
+  },
+  "split_counts": {
+    "train": 362,
+    "dev": 179,
+    "test": 373
+  },
+  "cluster_count": 141,
+  "consistency_check": {
+    "status": "ok",
+    "checked": 30,
+    "matched": 30,
+    "whitespace_only_differences": 0,
+    "mismatch_count": 0,
+    "mismatches": [],
+    "method": "按值比较（掩码后先精确、再折叠空白）；仅空白差异单独计数"
+  },
+  "label_method": "rule_auto + AI 初标；困难集进入 review_queue 待人工复核"
+}
