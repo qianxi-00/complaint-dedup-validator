@@ -30,13 +30,20 @@ def test_settings_load_active_defaults() -> None:
     assert str(settings.llm_base_url).rstrip("/") == "http://127.0.0.1:8000/v1"
     assert settings.llm_api_key == ""
     assert settings.llm_model == ""
-    assert settings.llm_concurrency == 2
+    assert settings.llm_concurrency == 8
     assert settings.llm_timeout_seconds == 180
     assert settings.llm_max_retries == 3
     assert settings.llm_temperature == 0
     assert settings.llm_max_tokens == 4096
     assert settings.llm_enable_thinking is False
     assert settings.llm_send_enable_thinking is True
+    assert settings.dedup_llm_enabled is True
+    assert settings.dedup_max_candidates == 30
+    assert settings.dedup_cards_per_batch == 16
+    assert settings.dedup_max_requests == 400
+    assert settings.dedup_max_concurrency == 8
+    assert settings.dedup_max_seconds == 1800
+    assert settings.dedup_min_confidence == 0.7
 
 
 @pytest.mark.parametrize(
@@ -51,6 +58,9 @@ def test_settings_load_active_defaults() -> None:
         ("llm_timeout_seconds", 0),
         ("llm_max_retries", 0),
         ("llm_max_tokens", 0),
+        ("dedup_max_candidates", 0),
+        ("dedup_cards_per_batch", 1),
+        ("dedup_max_concurrency", 0),
     ],
 )
 def test_settings_rejects_non_positive_limits(field: str, value: int) -> None:
@@ -61,6 +71,18 @@ def test_settings_rejects_non_positive_limits(field: str, value: int) -> None:
 def test_settings_rejects_missing_llm_base_url() -> None:
     with pytest.raises(ValidationError):
         make_settings(llm_base_url="")
+
+
+def test_dedup_limits_allow_local_model_unlimited_mode() -> None:
+    settings = make_settings(
+        dedup_max_requests=0,
+        dedup_max_seconds=0,
+        dedup_max_concurrency=16,
+    )
+
+    assert settings.dedup_max_requests == 0
+    assert settings.dedup_max_seconds == 0
+    assert settings.dedup_max_concurrency == 16
 
 
 def test_settings_rejects_invalid_timezone() -> None:

@@ -255,7 +255,9 @@ def normalize_organization_name(value: str | None) -> str:
     return text
 
 
-def extract_organization_subject(*texts: str | None) -> str | None:
+def extract_organization_subjects(*texts: str | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
     for text in texts:
         for match in _ORGANIZATION_RE.finditer(str(text or "")):
             candidate = match.group(0)
@@ -280,8 +282,16 @@ def extract_organization_subject(*texts: str | None) -> str | None:
                     break
                 candidate = stripped
             if len(candidate) >= 4 and not re.fullmatch(r"(?:某|该|此|相关)公司", candidate):
-                return candidate
-    return None
+                normalized = normalize_organization_name(candidate)
+                if normalized and normalized not in seen:
+                    result.append(candidate)
+                    seen.add(normalized)
+    return result
+
+
+def extract_organization_subject(*texts: str | None) -> str | None:
+    candidates = extract_organization_subjects(*texts)
+    return candidates[0] if candidates else None
 def parse_complaint(
     *, title: str | None, appeal: str | None, location: str | None
 ) -> ComplaintParseResult:

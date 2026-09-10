@@ -10,6 +10,7 @@ from complaint_dedup.config import Settings
 from complaint_dedup.corpus_database import corpus_database_url
 from complaint_dedup.corpus_io import load_records_auto
 from complaint_dedup.full_corpus import FullCorpusService
+from complaint_dedup.llm_client import build_llm_client
 from complaint_dedup.logging_setup import setup_logging
 
 
@@ -60,8 +61,18 @@ class FullCorpusWorker:
             pool_size=self.settings.db_pool_size,
             max_overflow=self.settings.db_max_overflow,
         )
+        llm_client = None
         try:
-            service = FullCorpusService(database)
+            if self.settings.dedup_llm_enabled and self.settings.llm_model:
+                llm_client = build_llm_client(
+                    self.settings,
+                    concurrency=self.settings.dedup_max_concurrency,
+                )
+            service = FullCorpusService(
+                database,
+                llm_client=llm_client,
+                settings=self.settings,
+            )
             payload = job.get("payload") or {}
             if job["kind"] == "sync":
                 path = Path(str(payload["path"]))
@@ -104,9 +115,15 @@ class FullCorpusWorker:
                     "event_count": result.event_count,
                     "singleton_count": result.singleton_count,
                     "missing_time_count": result.missing_time_count,
+                    "algorithm_version": result.algorithm_version,
+                    "llm_coverage": result.llm_coverage,
+                    "fallback_count": result.fallback_count,
+                    "decision_count": result.decision_count,
                 }
             raise ValueError("后台任务类型无效")
         finally:
+            if llm_client is not None:
+                await llm_client.aclose()
             await database.close()
 
 

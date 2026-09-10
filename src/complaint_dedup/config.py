@@ -40,13 +40,20 @@ class Settings(BaseSettings):
     llm_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
     llm_api_key: str = ""
     llm_model: str = ""
-    llm_concurrency: int = Field(default=2, gt=0)
+    llm_concurrency: int = Field(default=8, gt=0)
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=3, gt=0)
     llm_temperature: float = Field(default=0, ge=0)
     llm_max_tokens: int = Field(default=4096, gt=0)
     llm_enable_thinking: bool = False
     llm_send_enable_thinking: bool = True
+    dedup_llm_enabled: bool = True
+    dedup_max_candidates: int = Field(default=30, gt=0)
+    dedup_cards_per_batch: int = Field(default=16, ge=2, le=32)
+    dedup_max_requests: int = Field(default=400, ge=0)
+    dedup_max_concurrency: int = Field(default=8, gt=0, le=200)
+    dedup_max_seconds: float = Field(default=1800, ge=0)
+    dedup_min_confidence: float = Field(default=0.7, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_runtime_capacity(self) -> "Settings":

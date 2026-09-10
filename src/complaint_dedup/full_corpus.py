@@ -19,6 +19,7 @@ from complaint_dedup.corpus_parser import (
     parse_complaint,
 )
 from complaint_dedup.corpus_schema import (
+    comparison_decisions,
     comparison_event_members,
     comparison_events,
     comparison_record_members,
@@ -28,8 +29,20 @@ from complaint_dedup.corpus_schema import (
     work_order_versions,
     work_orders,
 )
+from complaint_dedup.dedup_engine import (
+    DedupEngine,
+    DedupEngineOptions,
+    JsonChatClient,
+)
+from complaint_dedup.dedup_features import (
+    FEATURE_VERSION,
+    FeatureBuildInput,
+    build_record_features,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+MAX_COMPARISON_EVENT_CACHE = 4
+MAX_FILTERED_EVENT_CACHE = 64
 ENTERPRISE_FAMILIES = {
     "food_safety": ("食品安全", "食品卫生", "餐饮卫生"),
     "wage": ("欠薪", "拖欠工资", "工资拖欠", "农民工工资"),
@@ -100,11 +113,23 @@ class ComparisonResult:
     event_count: int
     singleton_count: int
     missing_time_count: int
+    algorithm_version: str
+    llm_coverage: float
+    fallback_count: int
+    decision_count: int
 
 
 class FullCorpusService:
-    def __init__(self, database) -> None:
+    def __init__(
+        self,
+        database,
+        *,
+        llm_client: JsonChatClient | None = None,
+        settings: Any | None = None,
+    ) -> None:
         self.database = database
+        self.llm_client = llm_client
+        self.settings = settings
         self._operation_lock = asyncio.Lock()
         self._comparison_event_cache: dict[str, list[dict[str, Any]]] = {}
         self._filtered_event_cache: dict[tuple[str, EventFilters], list[dict[str, Any]]] = {}
@@ -133,16 +158,19 @@ class FullCorpusService:
         if not records:
             raise ValueError("全量文件没有可同步的工单")
         payloads = [_normalize_record(record) for record in records]
-        deduped: dict[str, dict[str, Any]] = {}
-        for payload in payloads:
-            deduped[payload["record_key"]] = payload
+        deduped = _dedupe_payloads(payloads)
         file_hash = file_hash or hashlib.sha256(
-            json.dumps(payloads, ensure_ascii=False, sort_keys=True, default=str).encode()
+            json.dumps(
+                deduped,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode()
         ).hexdigest()
         sync_id = uuid.uuid4().hex
         now = datetime.now(UTC)
         inserted_count = updated_count = missing_count = 0
-        business_columns = _business_columns(records)
+        business_columns = _business_columns_from_payloads(deduped.values())
 
         async with self.database.engine.begin() as connection:
             await connection.execute(
@@ -438,6 +466,10 @@ class FullCorpusService:
             for event in events
         ]
         self._comparison_event_cache[comparison_id] = result
+        if len(self._comparison_event_cache) > MAX_COMPARISON_EVENT_CACHE:
+            self._comparison_event_cache.pop(
+                next(iter(self._comparison_event_cache))
+            )
         return result
 
     async def list_event_member_snapshots(self, event_id: int) -> list[dict[str, Any]]:
@@ -536,9 +568,37 @@ class FullCorpusService:
         target_end = _local_start(target_to + timedelta(days=1))
         reference_start = _local_start(reference_from) if reference_from else None
         reference_end = _local_start(reference_to + timedelta(days=1)) if reference_to else None
-        groups = _split_conflicting_groups(
-            {"target": target_rows, "reference": reference_rows},
-            set(),
+        dedup = await DedupEngine(
+            llm_client=self.llm_client,
+            options=DedupEngineOptions.from_settings(self.settings),
+        ).cluster([*target_rows, *reference_rows])
+        groups = [
+            (
+                _final_event_key(member_rows, dedup.algorithm_version),
+                member_rows,
+            )
+            for member_rows in dedup.groups
+        ]
+        record_event_keys = {
+            str(row["record_key"]): event_key
+            for event_key, member_rows in groups
+            for row in member_rows
+        }
+        expected_keys = {
+            str(row["record_key"]) for row in (*target_rows, *reference_rows)
+        }
+        grouped_record_keys = [
+            str(row["record_key"])
+            for _, member_rows in groups
+            for row in member_rows
+        ]
+        if (
+            len(grouped_record_keys) != len(set(grouped_record_keys))
+            or set(grouped_record_keys) != expected_keys
+        ):
+            raise RuntimeError("判重结果存在工单丢失或重复成员，任务已中止")
+        singleton_count = sum(
+            1 for _, member_rows in groups if len(member_rows) == 1
         )
         async with self.database.engine.begin() as connection:
             await connection.execute(
@@ -555,8 +615,15 @@ class FullCorpusService:
                     target_count=len(target_rows),
                     reference_count=len(reference_rows),
                     event_count=len(groups),
-                    singleton_count=sum(1 for rows_ in groups.values() if len(rows_) == 1),
+                    singleton_count=singleton_count,
                     missing_time_count=missing_time_count,
+                    algorithm_version=dedup.algorithm_version,
+                    feature_version=dedup.feature_version,
+                    prompt_version=dedup.prompt_version,
+                    model_id=dedup.model_id or None,
+                    llm_coverage=dedup.llm_coverage,
+                    fallback_count=dedup.fallback_count,
+                    decision_count=dedup.decision_count,
                     created_at=now,
                 )
             )
@@ -568,11 +635,11 @@ class FullCorpusService:
                             record_key=row["record_key"],
                             side=side,
                             snapshot_json=_snapshot(row),
-                            event_key=row["event_key"],
+                            event_key=record_event_keys[str(row["record_key"])],
                         )
                     )
             target_keys = {row["record_key"] for row in target_rows}
-            for event_key, members in groups.items():
+            for event_key, members in groups:
                 name = _event_name(members[0])
                 event_id = (
                     await connection.execute(
@@ -596,7 +663,41 @@ class FullCorpusService:
                             side=side,
                         )
                     )
-        return ComparisonResult(comparison_id, len(target_rows), len(reference_rows), len(groups), sum(1 for rows_ in groups.values() if len(rows_) == 1), missing_time_count)
+            for audit in dedup.audits:
+                await connection.execute(
+                    insert(comparison_decisions).values(
+                        comparison_id=comparison_id,
+                        card_id=str(audit["card_id"])[:128],
+                        card_ids=audit.get("card_ids") or [],
+                        assigned_card_ids=audit.get("assigned_card_ids") or [],
+                        decision=str(audit["decision"]),
+                        confidence=float(audit.get("confidence") or 0),
+                        evidence_json=audit.get("evidence_json") or [],
+                        conflict_json=audit.get("conflict_json") or [],
+                        rule_version=str(audit["rule_version"]),
+                        prompt_version=audit.get("prompt_version"),
+                        model_id=audit.get("model_id"),
+                        final_event_key=_audit_final_event_key(
+                            audit, record_event_keys
+                        ),
+                        fallback_reason=audit.get("fallback_reason"),
+                        elapsed_ms=audit.get("elapsed_ms"),
+                        record_keys=audit.get("record_keys") or [],
+                        created_at=now,
+                    )
+                )
+        return ComparisonResult(
+            comparison_id,
+            len(target_rows),
+            len(reference_rows),
+            len(groups),
+            singleton_count,
+            missing_time_count,
+            dedup.algorithm_version,
+            dedup.llm_coverage,
+            dedup.fallback_count,
+            dedup.decision_count,
+        )
 
     async def list_comparison_members(self, comparison_id: str) -> list[dict[str, Any]]:
         async with self.database.engine.connect() as connection:
@@ -923,6 +1024,10 @@ class FullCorpusService:
                         continue
             result.append(summary)
         self._filtered_event_cache[cache_key] = result
+        if len(self._filtered_event_cache) > MAX_FILTERED_EVENT_CACHE:
+            self._filtered_event_cache.pop(
+                next(iter(self._filtered_event_cache))
+            )
         return result
 
     def _invalidate_comparison_cache(self, comparison_id: str) -> None:
@@ -977,6 +1082,17 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
         or _raw(record.raw_fields, "处理部门", "承办部门")
         or department
     )
+    features = build_record_features(
+        FeatureBuildInput(
+            work_order_id=work_order_id,
+            title=record.title,
+            appeal_text=appeal,
+            location=location,
+            category=category,
+            parsed=parsed,
+            source_row=record.source_row,
+        )
+    )
     raw = dict(record.raw_fields)
     raw.setdefault("受理时间", record.received_at)
     raw.setdefault("办结时间", record.completed_at)
@@ -985,6 +1101,8 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
     return {
         "record_key": record_key,
         "work_order_id": work_order_id,
+        "canonical_work_order_id": features.canonical_work_order_id,
+        "complaint_fingerprint": features.complaint_fingerprint,
         "received_at": received_at,
         "completed_at": completed_at,
         "title_raw": record.title,
@@ -1000,21 +1118,159 @@ def _normalize_record(record: InputRecord) -> dict[str, Any]:
         "organization_subject": org,
         "issue_family": family,
         "event_key": event_key,
+        "feature_json": features.to_json(),
+        "feature_version": FEATURE_VERSION,
         "raw_json": raw,
         "source_row": record.source_row,
     }
 
 
-def _business_columns(records: list[InputRecord]) -> list[str]:
+def _business_columns_from_payloads(payloads) -> list[str]:
     columns: list[str] = []
     seen: set[str] = set()
-    for record in records:
-        for key in record.raw_fields:
+    for payload in payloads:
+        for key in (payload.get("raw_json") or {}):
             normalized = str(key)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 columns.append(normalized)
     return columns
+
+
+def _dedupe_payloads(payloads: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        record_key = str(payload["record_key"])
+        if record_key not in deduped:
+            deduped[record_key] = payload
+        else:
+            deduped[record_key] = _merge_payloads(deduped[record_key], payload)
+    return deduped
+
+
+def _merge_payloads(
+    left: dict[str, Any], right: dict[str, Any]
+) -> dict[str, Any]:
+    merged = dict(left)
+    for field in (
+        "work_order_id",
+        "title_raw",
+        "appeal_text",
+        "category",
+        "processing_department",
+        "department",
+        "location",
+    ):
+        merged[field] = _prefer_longer(left.get(field), right.get(field))
+    merged["received_at"] = _prefer_later_datetime(
+        left.get("received_at"), right.get("received_at")
+    )
+    merged["completed_at"] = _prefer_later_datetime(
+        left.get("completed_at"), right.get("completed_at")
+    )
+    raw_json = _merge_raw_json(
+        left.get("raw_json") or {},
+        right.get("raw_json") or {},
+    )
+    merged["raw_json"] = raw_json
+    source_rows = {
+        int(value)
+        for payload in (left, right)
+        for value in (
+            (payload.get("feature_json") or {}).get("source_rows")
+            or [payload.get("source_row")]
+        )
+        if value not in (None, "")
+    }
+    merged["source_row"] = min(source_rows) if source_rows else None
+    record = InputRecord(
+        source_row=int(merged.get("source_row") or 0),
+        work_order_id=merged.get("work_order_id"),
+        title=merged.get("title_raw"),
+        category=merged.get("category"),
+        appeal_text=merged.get("appeal_text"),
+        received_at=merged.get("received_at"),
+        completed_at=merged.get("completed_at"),
+        location=merged.get("location"),
+        processing_department=merged.get("processing_department"),
+        raw_fields=raw_json,
+    )
+    refreshed = _normalize_record(record)
+    refreshed["record_key"] = str(left["record_key"])
+    refreshed["feature_json"]["source_rows"] = sorted(source_rows)
+    return refreshed
+
+
+def _prefer_longer(left: Any, right: Any) -> Any:
+    if left in (None, ""):
+        return right
+    if right in (None, ""):
+        return left
+    return max((left, right), key=lambda value: len(str(value)))
+
+
+def _prefer_later_datetime(left: Any, right: Any) -> Any:
+    if left in (None, ""):
+        return right
+    if right in (None, ""):
+        return left
+    left_dt = _parse_datetime(left)
+    right_dt = _parse_datetime(right)
+    if left_dt is None:
+        return right
+    if right_dt is None:
+        return left
+    return max(left_dt, right_dt)
+
+
+def _merge_raw_json(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(left)
+    for key, value in right.items():
+        current = merged.get(key)
+        if current in (None, ""):
+            merged[key] = value
+            continue
+        if value in (None, ""):
+            continue
+        if "时间" in str(key) or "日期" in str(key):
+            merged[key] = _prefer_later_value(current, value)
+        elif isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _merge_raw_json(current, value)
+        else:
+            merged[key] = _prefer_longer(current, value)
+    return merged
+
+
+def _prefer_later_value(left: Any, right: Any) -> Any:
+    left_dt = _parse_datetime(left)
+    right_dt = _parse_datetime(right)
+    if left_dt is None:
+        return right
+    if right_dt is None:
+        return left
+    return left if left_dt >= right_dt else right
+
+
+def _final_event_key(rows: list[dict[str, Any]], algorithm_version: str) -> str:
+    record_keys = sorted(str(row["record_key"]) for row in rows)
+    if len(record_keys) == 1:
+        return "singleton|" + _key_part(record_keys[0])
+    digest = hashlib.sha256(
+        ("\x1f".join(record_keys) + "\x1e" + algorithm_version).encode("utf-8")
+    ).hexdigest()
+    return f"cluster|{algorithm_version}|{digest}"
+
+
+def _audit_final_event_key(
+    audit: dict[str, Any],
+    record_event_keys: dict[str, str],
+) -> str | None:
+    event_keys = {
+        record_event_keys[str(record_key)]
+        for record_key in audit.get("record_keys") or []
+        if str(record_key) in record_event_keys
+    }
+    return next(iter(event_keys)) if len(event_keys) == 1 else None
 
 
 def _event_key(
@@ -1045,26 +1301,6 @@ def _event_name(row: dict[str, Any]) -> str:
         str(value or "未知")
         for value in (row.get("region"), row.get("street"), subject, issue)
     )
-
-
-def _split_conflicting_groups(sides: dict[str, list[dict[str, Any]]], pairs: set[tuple[str, str]]) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in (*sides["target"], *sides["reference"]):
-        grouped.setdefault(str(row["event_key"]), []).append(row)
-    result: dict[str, list[dict[str, Any]]] = {}
-    for key, rows in grouped.items():
-        conflict_ids = {
-            record_key
-            for left, right in pairs
-            for record_key in (left, right)
-            if left in {row["record_key"] for row in rows} and right in {row["record_key"] for row in rows}
-        }
-        remaining = [row for row in rows if row["record_key"] not in conflict_ids]
-        if remaining:
-            result[key] = remaining
-        for record in [row for row in rows if row["record_key"] in conflict_ids]:
-            result[f"{key}|singleton|{record['record_key']}"] = [record]
-    return result
 
 
 def _issue_family(*values: str | None) -> str | None:

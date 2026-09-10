@@ -151,6 +151,15 @@ def build_llm_client(
     model: str | None = None,
     concurrency: int | None = None,
 ) -> LlmClient:
+    resolved_concurrency = concurrency or settings.llm_concurrency
+    max_connections = max(
+        settings.http_max_connections,
+        resolved_concurrency + 4,
+    )
+    max_keepalive_connections = min(
+        max_connections,
+        max(settings.http_max_keepalive_connections, resolved_concurrency),
+    )
     return LlmClient(
         base_url=str(settings.llm_base_url),
         api_key=settings.llm_api_key,
@@ -161,9 +170,9 @@ def build_llm_client(
         max_tokens=settings.llm_max_tokens,
         enable_thinking=settings.llm_enable_thinking,
         send_enable_thinking=settings.llm_send_enable_thinking,
-        concurrency=concurrency or settings.llm_concurrency,
-        max_connections=settings.http_max_connections,
-        max_keepalive_connections=settings.http_max_keepalive_connections,
+        concurrency=resolved_concurrency,
+        max_connections=max_connections,
+        max_keepalive_connections=max_keepalive_connections,
     )
 
 

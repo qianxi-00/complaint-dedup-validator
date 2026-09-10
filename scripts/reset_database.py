@@ -55,6 +55,7 @@ TABLES_TO_DROP = (
     "processing_jobs",
     "comparison_event_members",
     "comparison_events",
+    "comparison_decisions",
     "comparison_record_members",
     "comparison_runs",
     "work_order_versions",

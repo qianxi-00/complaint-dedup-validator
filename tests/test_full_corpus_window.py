@@ -292,6 +292,7 @@ async def test_enterprise_family_without_subject_stays_singleton(full_database):
                 "2026-09-01 09:00:00",
                 completed="2026-09-01 11:00:00",
                 title="反映食品安全问题",
+                location="江海区礼乐街道另一处食品安全相关地点",
             ),
         ],
         file_name="all.xlsx",
