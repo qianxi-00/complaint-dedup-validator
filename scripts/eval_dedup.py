@@ -280,7 +280,8 @@ def collect_versions(settings: Settings, db_path: str | None) -> dict[str, Any]:
             "commit": _run_git("rev-parse", "HEAD"),
             "branch": _run_git("rev-parse", "--abbrev-ref", "HEAD"),
             "tag": _run_git("tag", "--points-at", "HEAD"),
-            "dirty": bool(_run_git("status", "--porcelain")),
+            # 只统计已跟踪文件的修改；报告等未跟踪产物不代表代码工作区不干净
+            "dirty": bool(_run_git("status", "--porcelain", "--untracked-files=no")),
         },
         "algorithm": {
             "feature_version": FEATURE_VERSION,
