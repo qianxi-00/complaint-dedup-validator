@@ -22,7 +22,7 @@ uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765
 
 ## 时间窗口规则
 
-- 默认比对字段：`办结时间`。
+- 默认比对字段：`受理时间`。
 - 待比对时间段：用户选择；未填写时默认取上传文件中该字段的最大日期当天。
 - 被比对时间段：默认是全量库中待比对时间段的补集。
 - 手动指定被比对时间段时，必须与待比对时间段不重叠。
@@ -47,14 +47,16 @@ uv run pytest -q
 
 ## Docker 部署
 
-内网部署使用 `deploy/compose.intranet.yaml`，包含 PostgreSQL、迁移任务和 API 服务，默认端口 `28765`：
+内网部署使用 `deploy/compose.intranet.yaml`，包含 PostgreSQL、API 和 worker，默认端口 `28765`。数据库表会在 API 启动时自动创建并校验，实施人员只需配置模型连接：
 
 ```bash
-docker compose -f compose.intranet.yaml run --rm migrate
-docker compose -f compose.intranet.yaml up -d
+mkdir -p config
+cp deploy/env.intranet.example config/.env
+# 修改 config/.env 中的 LLM_BASE_URL、LLM_API_KEY、LLM_MODEL
+docker compose --project-directory . -f deploy/compose.intranet.yaml up -d
 ```
 
-当前版本删除了账号隔离、历史代次和旧批次模型。旧数据库不能直接执行新基线迁移；确认已备份且不保留旧数据时，先执行：
+当前版本删除了账号隔离、历史代次和旧批次模型。正常 Docker 启动会自动创建并校验当前表；只有明确需要破坏性清空旧库时，才执行：
 
 ```powershell
 uv run python scripts/reset_database.py --confirm-reset
@@ -63,3 +65,5 @@ uv run python scripts/reset_database.py --confirm-reset
 该命令会删除旧表和旧 `alembic_version`，然后初始化当前使用的 9 张表（含 `license_state`）。生产环境必须先停止服务并完成数据库备份。
 
 生产凭据只保存在服务器 `config/.env`，不得提交 Git。
+
+纯内网离线构建、镜像导出、授权续期和回滚步骤见[《内网离线交付与续期部署手册》](docs/内网离线交付与续期部署手册.md)。

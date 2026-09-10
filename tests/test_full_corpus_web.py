@@ -51,6 +51,9 @@ def test_full_corpus_web_upload_and_create_comparison(tmp_path: Path):
         assert sync_job["status_code"] == "completed"
         assert sync_job["status"] == "已完成"
         assert "progress" not in sync_job
+        submitted = client.get(f"/?job_id={sync_job_id}")
+        assert "查看任务状态" not in submitted.text
+        assert 'id="job-message"' in submitted.text
         home = client.get("/")
         assert home.status_code == 200
         assert "当前工单数" in home.text
@@ -76,6 +79,9 @@ def test_full_corpus_web_upload_and_create_comparison(tmp_path: Path):
         assert "办结时间" in detail.text
         assert "处理部门" in detail.text
         assert "礼乐街道办事处" in detail.text
+        assert detail.text.count('data-export-download') == 2
+        assert 'id="export-status"' in detail.text
+        assert '/static/export.js' in detail.text
         exported = client.get(f"/comparisons/{comparison_id}/export")
         assert exported.status_code == 200
         workbook = load_workbook(BytesIO(exported.content))

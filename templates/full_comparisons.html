@@ -1,7 +1,8 @@
 {% extends "full_base.html" %}
 {% block title %}历史比对与事件库{% endblock %}
 {% block content %}
-<section class="page-heading"><div><h1>历史比对与事件库</h1><p>选择一次比对任务后查看事件、筛选结果和工单明细。</p></div>{% if comparison %}<div class="heading-actions"><a class="button secondary" href="{{ all_export_url }}">导出全量结果</a><a class="button" href="{{ filtered_export_url }}">按当前筛选导出</a></div>{% endif %}</section>
+<section class="page-heading"><div><h1>历史比对与事件库</h1><p>选择一次比对任务后查看事件、筛选结果和工单明细。</p></div>{% if comparison %}<div class="heading-actions"><a class="button secondary" data-export-download href="{{ all_export_url }}">导出全量结果</a><a class="button" data-export-download href="{{ filtered_export_url }}">按当前筛选导出</a></div>{% endif %}</section>
+{% if comparison %}<p id="export-status" class="export-status" role="status" aria-live="polite" hidden></p><script src="/static/export.js?v=20260910" defer></script>{% endif %}
 <section class="panel"><div class="panel-heading"><div><h2>历史比对任务</h2><p>任务列表分页显示，默认打开最近一次任务。</p></div></div>
 <table><thead><tr><th>比对字段</th><th>待比对时间</th><th>待比对工单</th><th>被比对工单</th><th>事件数</th><th>创建时间</th><th></th></tr></thead><tbody>
 {% for row in comparisons %}<tr><td>{{ '办结时间' if row.time_field == 'completed_at' else '受理时间' }}</td><td>{{ row.target_from|localtime }} 至 {{ row.target_to|endday|localtime }}</td><td>{{ row.target_count }}</td><td>{{ row.reference_count }}</td><td>{{ row.event_count }}</td><td>{{ row.created_at|localtime }}</td><td><a href="/comparisons?comparison_id={{ row.id }}">查看事件库</a></td></tr>{% else %}<tr><td colspan="7" class="muted">暂无已完成的比对任务</td></tr>{% endfor %}

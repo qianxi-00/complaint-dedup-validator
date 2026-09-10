@@ -1,25 +1,8 @@
 services:
-  migrate:
-    image: complaint-dedup-validator:latest
-    build:
-      context: ./app
-      dockerfile: ../image/Dockerfile
-    command: ["alembic", "upgrade", "head"]
-    restart: "no"
-    env_file:
-      - ./config/.env
-    environment:
-      PYTHONPATH: /app/src
-    volumes:
-      - ./app:/app:ro
-
   api:
     image: complaint-dedup-validator:latest
     restart: unless-stopped
     init: true
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
     env_file:
       - ./config/.env
     environment:
@@ -40,8 +23,8 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      api:
+        condition: service_healthy
     env_file:
       - ./config/.env
     environment:

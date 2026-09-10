@@ -14,9 +14,9 @@ Run from the repository root:
 
 - `uv sync` installs locked dependencies.
 - `uv run pytest -q` runs the full regression suite.
-- `uv run alembic upgrade head` initializes the active SQLite/PostgreSQL schema.
+- `uv run alembic upgrade head` is retained for migration tests; normal Docker startup initializes and validates the active PostgreSQL schema automatically.
 - `uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765` starts the current web service.
-- `docker compose -f deploy/compose.intranet.yaml up -d` runs the PostgreSQL-backed internal deployment; the public port is `28765`.
+- `docker compose -f deploy/compose.intranet.yaml up -d` runs the PostgreSQL-backed internal deployment; the public port is `28765`. API startup creates missing current tables and rejects legacy or incomplete schemas; worker waits for API health.
 
 The current workflow uploads one full Excel file to update the complete work-order store, then creates an independent comparison task using either `completed_at` or `received_at`. Without a manual reference window, the reference side is the complement of the target window; records missing the selected date enter the target side and are counted separately.
 

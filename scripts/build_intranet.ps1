@@ -60,7 +60,7 @@ try {
     New-Item -ItemType Directory -Force -Path $staging, "$staging/licenses", $OutputDir | Out-Null
 
     Copy-Item pyproject.toml, uv.lock, Dockerfile.intranet $staging
-    Copy-Item templates, static, alembic $staging -Recurse
+    Copy-Item templates, static, alembic, deploy $staging -Recurse
     Copy-Item alembic.ini $staging
     Copy-Item src $staging -Recurse
     Copy-Item tests $staging -Recurse
@@ -72,7 +72,6 @@ try {
 runtime
 output
 docs
-deploy
 scripts/build_intranet.ps1
 **/__pycache__
 **/*.pyc
@@ -97,16 +96,16 @@ scripts/build_intranet.ps1
     if ($SkipDocker) {
         Write-Host "== [3/5] 跳过 Docker 构建(-SkipDocker);构建上下文已就绪: $staging ==" -ForegroundColor Yellow
         Write-Host "  手动构建:" 
-        Write-Host "  docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging"
+        Write-Host "  docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull $staging"
         Write-Host "  docker build -f Dockerfile.intranet -t ${ImageName}:$ImageTag --build-arg EXPIRE_DATE=$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull $staging"
         return
     }
     Write-Host "== [3/5] Docker 构建:tester 阶段(混淆 + 镜像内测试闸门) ==" -ForegroundColor Cyan
-    docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging
+    docker build --target tester -f Dockerfile.intranet --build-arg EXPIRE_DATE=$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull $staging
     if ($LASTEXITCODE -ne 0) { throw "镜像内测试闸门未通过(混淆产物回归失败)" }
 
     Write-Host "== [3/5] Docker 构建:runtime 正式镜像 ==" -ForegroundColor Cyan
-    docker build -f Dockerfile.intranet -t "${ImageName}:$ImageTag" -t "${ImageName}:latest" --build-arg EXPIRE_DATE=`$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull `$staging
+    docker build -f Dockerfile.intranet -t "${ImageName}:$ImageTag" -t "${ImageName}:latest" --build-arg EXPIRE_DATE=$ExpireDate --build-arg PYARMOR_REQUIRE_FULL=$requireFull $staging
     if ($LASTEXITCODE -ne 0) { throw "镜像构建失败" }
 
     # ---- 4. 导出镜像 ----
