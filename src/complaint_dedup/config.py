@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     app_timezone: str = "Asia/Shanghai"  # 业务时区，用于自然日计算与授权日期
 
     # ------------------------------- 数据库配置 -------------------------------
-    database_mode: Literal["sqlite", "postgresql"] = "sqlite"  # 数据库类型
-    database_path: Path = Path("runtime/app.db")  # SQLite 数据库文件路径
+    database_mode: Literal["sqlite", "postgresql"] = "postgresql"  # 数据库类型（运行时统一 PostgreSQL）
+    database_path: Path = Path("runtime/app.db")  # 运行数据目录基准路径（上传/导出等使用其父目录；SQLite 仅测试用）
     db_host: str = "127.0.0.1"  # PostgreSQL 主机地址
     db_port: int = Field(default=5432, gt=0, le=65_535)  # PostgreSQL 端口
     db_user: str = "postgres"  # PostgreSQL 用户名

@@ -28,7 +28,7 @@ complaint-dedup-validator/
 │  ├─ main.py                    # 应用入口（uvicorn complaint_dedup.main:app）
 │  ├─ full_corpus.py             # 同步、窗口划分、事件快照、筛选与导出查询
 │  ├─ full_corpus_web.py         # FastAPI 路由、模板渲染、上传落盘、授权中间件
-│  ├─ full_corpus_worker.py      # 后台任务循环（SQLite 内嵌 / PostgreSQL 独立进程）
+│  ├─ full_corpus_worker.py      # 后台任务循环（独立进程）
 │  ├─ dedup_engine.py            # 硬合并、候选召回、事件卡 LLM 裁决与回退
 │  ├─ dedup_features.py          # 判重特征归一化与 PII 脱敏
 │  ├─ corpus_parser.py           # 诉求文本解析（地区/街道/地址/主体/发生对象）
@@ -48,19 +48,20 @@ complaint-dedup-validator/
 ├─ deploy/                       # compose.intranet.yaml、env.intranet.example
 ├─ scripts/                      # reset_database.py、内网离线构建与混淆脚本
 ├─ Dockerfile / Dockerfile.intranet
-└─ runtime/                      # 本地运行数据（上传、导出、日志、SQLite），不提交
+└─ runtime/                      # 本地运行数据（上传、导出、日志），不提交
 ```
 
 ## 本地启动
 
 ```powershell
 uv sync
-Copy-Item .env.example .env
-uv run alembic upgrade head  # 仅适用于空库；旧库请先按下方说明重置
+Copy-Item .env.example .env   # 填写 DB_* 与百炼 LLM_API_KEY
 uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765
+# 另开一个终端启动后台 worker（PostgreSQL 模式下 API 不内嵌 worker）
+uv run python -m complaint_dedup.full_corpus_worker
 ```
 
-打开 `http://127.0.0.1:8765`。也可直接运行 `./start.ps1`。本地 SQLite 模式会在 API 进程内启动内嵌 worker。
+打开 `http://127.0.0.1:8765`。运行时统一使用 PostgreSQL；API 启动会自动创建并校验当前表结构。SQLite 仅在单元测试的临时目录中使用。
 
 ## 时间窗口规则
 

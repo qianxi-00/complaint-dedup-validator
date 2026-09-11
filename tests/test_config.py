@@ -19,7 +19,7 @@ def test_settings_load_active_defaults() -> None:
     assert settings.app_host == "127.0.0.1"
     assert settings.app_port == 8765
     assert settings.app_timezone == "Asia/Shanghai"
-    assert settings.database_mode == "sqlite"
+    assert settings.database_mode == "postgresql"
     assert settings.database_path == Path("runtime/app.db")
     assert settings.db_name == "gongdan"
     assert settings.db_pool_size == 10

@@ -4,17 +4,17 @@
 
 投诉全量工单比对系统 (`complaint-dedup-validator`) maintains a continuously updated full work-order corpus and runs duplicate detection between a target time window and a reference side (manual window or complement of the corpus). Every comparison is frozen as an independent task snapshot, so later syncs never change historical results. Results are filterable, reviewable, manually adjustable, and exportable.
 
-Stack: Python 3.12, FastAPI, SQLAlchemy 2 async, Alembic, Jinja2 server-rendered templates, loguru, xlsxwriter; SQLite for local runs, PostgreSQL for intranet Docker. Event grouping is deterministic hard merge + gray-zone candidate recall + external LLM event-card adjudication + conservative rule fallback. Do not reintroduce accounts, daily-batch queues, generation rollover, HTMX partials, vector stores, or `cannot_links`.
+Stack: Python 3.12, FastAPI, SQLAlchemy 2 async, Alembic, Jinja2 server-rendered templates, loguru, xlsxwriter; PostgreSQL for dev, test and intranet Docker runtimes (SQLite is only used by unit tests). Event grouping is deterministic hard merge + gray-zone candidate recall + external LLM event-card adjudication + conservative rule fallback. Do not reintroduce accounts, daily-batch queues, generation rollover, HTMX partials, vector stores, or `cannot_links`.
 
 ## Project Structure
 
 - `src/complaint_dedup/` — application package.
   - `main.py` — entry point and `build_app` factory.
   - `full_corpus.py` — `FullCorpusService` core: sync upsert / missing marking / version snapshots, target-reference window partitioning (complement, manual, empty-date handling), event persistence, filtered/paginated event queries, export rows.
-  - `full_corpus_web.py` — FastAPI routes, upload staging under `runtime/full_uploads`, Jinja filters (`localtime`, `endday`), license middleware, app lifespan with embedded worker for SQLite.
-  - `full_corpus_worker.py` — background job loop (`claim_job` / `complete_job` / `fail_job`); embedded in the API for SQLite, standalone process (`python -m complaint_dedup.full_corpus_worker`) for PostgreSQL.
-  - `dedup_engine.py` — `DedupEngine`: hard merge (canonical work-order ID including `HBDn` suffix, complaint fingerprint, occurrence IDs), multi-path candidate recall, event-card LLM partition/validation, request/time-budget conservative fallback.
-  - `dedup_features.py` — reusable feature normalization (`FEATURE_VERSION = "feature-v2"`): HBD suffix stripping, complaint fingerprint, occurrence identifiers, PII sanitizing for model payloads.
+  - `full_corpus_web.py` — FastAPI routes, upload staging under `runtime/full_uploads`, Jinja filters (`localtime`, `endday`), license middleware, app lifespan and schema bootstrap.
+  - `full_corpus_worker.py` — background job loop (`claim_job` / `complete_job` / `fail_job`); always run as a standalone process (`python -m complaint_dedup.full_corpus_worker`) in runtime deployments; the API only embeds it in SQLite test setups.
+  - `dedup_engine.py` — `DedupEngine`: hard merge (canonical work-order ID including `HBDn` suffix, complaint fingerprint, appeal fingerprint, occurrence IDs, enterprise family), multi-path candidate recall, event-card LLM partition/validation, request/time-budget conservative fallback.
+  - `dedup_features.py` — reusable feature normalization (`FEATURE_VERSION = "feature-v3"`): HBD suffix stripping, content/appeal fingerprint, location signature, problem family, PII sanitizing for model payloads.
   - `corpus_parser.py` — complaint text parsing: region/street/road/building/unit/room/anchor, organization subject, previous work-order IDs, occurrence IDs, issue segments.
   - `full_corpus_exporter.py` — xlsxwriter export: `重复项` / `孤立工单` sheets, event coloring, frozen header, autofilter, formula-injection guard.
   - `corpus_schema.py` — 10 business tables with Chinese comments. `async_database.py` creates/validates the schema and applies PostgreSQL comments; `corpus_database.py` builds SQLite/PostgreSQL URLs.
@@ -24,7 +24,7 @@ Stack: Python 3.12, FastAPI, SQLAlchemy 2 async, Alembic, Jinja2 server-rendered
 - `alembic/versions/` — four migrations, single head `20260910_0004`. Baseline `20260908_0001_full_corpus_baseline.py` targets empty databases; legacy schemas are never migrated in place.
 - `tests/` — 14 pytest modules (~100 test functions) plus `export_ui.test.cjs` (Node built-in runner). No `conftest.py`; async fixtures live per file.
 - `scripts/` — `reset_database.py` (destructive reset), `build_intranet.ps1` / `build_intranet_bundle.sh` (offline delivery), `obfuscate.sh` (PyArmor in builder).
-- `runtime/` — local scratch (uploads, exports, logs, SQLite databases); never commit its contents.
+- `runtime/` — local scratch (uploads, exports, logs); never commit its contents.
 
 ## Build, Test, and Run
 
@@ -34,8 +34,8 @@ Run from the repository root:
 - `uv run pytest -q` — full regression suite.
 - `node --test tests/export_ui.test.cjs` — export button JS tests.
 - `uv run alembic upgrade head` — retained for migration tests and empty databases; normal Docker startup creates and validates the current schema automatically.
-- `uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765` — local web service (SQLite embedded worker).
-- `uv run python -m complaint_dedup.full_corpus_worker` — standalone worker.
+- `uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765` — local web service (PostgreSQL from `.env`).
+- `uv run python -m complaint_dedup.full_corpus_worker` — standalone worker (required for local PostgreSQL runs).
 - `docker compose --project-directory . -f deploy/compose.intranet.yaml up -d` — PostgreSQL intranet stack; API maps `28765:8765`, worker waits for API health.
 
 ## Domain Workflow
