@@ -6,7 +6,6 @@ __pycache__/
 .coverage
 htmlcov/
 .playwright-cli/
-.superpowers/
 output/
 
 runtime/
