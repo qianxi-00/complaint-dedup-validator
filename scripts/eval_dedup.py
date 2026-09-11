@@ -279,6 +279,16 @@ def _run_git(*args: str) -> str:
         return ""
 
 
+def _git_dirty_tracked() -> bool:
+    output = _run_git("status", "--porcelain", "--untracked-files=no")
+    lines = [
+        line
+        for line in output.splitlines()
+        if "判重评估报告" not in line
+    ]
+    return bool(lines)
+
+
 def collect_versions(settings: Settings, db_path: str | None) -> dict[str, Any]:
     import importlib.metadata as metadata
 
@@ -293,8 +303,8 @@ def collect_versions(settings: Settings, db_path: str | None) -> dict[str, Any]:
             "commit": _run_git("rev-parse", "HEAD"),
             "branch": _run_git("rev-parse", "--abbrev-ref", "HEAD"),
             "tag": _run_git("tag", "--points-at", "HEAD"),
-            # 只统计已跟踪文件的修改；报告等未跟踪产物不代表代码工作区不干净
-            "dirty": bool(_run_git("status", "--porcelain", "--untracked-files=no")),
+            # 只统计已跟踪代码修改；生成的评估报告本身不算代码工作区不干净
+            "dirty": _git_dirty_tracked(),
         },
         "algorithm": {
             "feature_version": FEATURE_VERSION,
