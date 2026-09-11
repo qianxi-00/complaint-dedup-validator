@@ -25,19 +25,20 @@ from complaint_dedup.dedup_features import (
 )
 from complaint_dedup.llm_models import EventCardBatchResponse
 
-ALGORITHM_VERSION = "event-key-v3"
-PROMPT_VERSION = "event-card-v3"
+ALGORITHM_VERSION = "event-key-v4"
+PROMPT_VERSION = "event-card-v4"
 SYSTEM_PROMPT = """你是投诉工单判重专家。你只判断输入事件卡是否属于同一具体投诉事件或同一处置链。
 必须遵守：
 1. 仅因地区、街道、事项大类或电话相同，不得判为同一事件。
 2. 同一主体、同一具体问题对象且没有硬冲突时，可以判为同一事件。
 3. 明确不同的订单、门牌、楼栋、房间、商品、被投诉对象或核心事实，必须拆分。
-4. 同一企业、同一问题族（如欠薪、食品安全、产品质量）的投诉，即使由不同人、不同月份提出，也视为同一事件。
-5. 消费纠纷（商品、家用电器、交通工具等）默认属于不同事件，除非订单号一致，或同一商品对象且同一具体问题。
-6. 瞬时事项（噪音、占道、交通、单一故障）时间接近是重要的合并证据；持续事项（欠薪、物业、食品、产品质量）可以跨月，以主体和问题对象为准。
-7. 证据不足时放入 unresolved_card_ids，不得猜测。
-8. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
-9. 每个 card_id 最多出现在一个分组中。
+4. 仅对小区类持续事项（物业服务、物业收费、业委会、维修资金、电梯与消防维护）适用以下例外：同一小区、同一核心问题（如物业费质价严重不符、物业服务不到位）的多条投诉，即使分别标注不同楼栋、门牌或房间，也视为同一事件；核心问题不同（如收费争议与电梯故障、噪音、违建等）仍必须拆分。其他类别（尤其消费纠纷）不得援引本条合并。
+5. 同一企业、同一问题族（如欠薪、食品安全、产品质量）的投诉，即使由不同人、不同月份提出，也视为同一事件。
+6. 消费纠纷（商品、家用电器、交通工具等）默认属于不同事件，除非订单号一致，或同一商品对象且同一具体问题。
+7. 瞬时事项（噪音、占道、交通、单一故障）时间接近是重要的合并证据；持续事项（欠薪、物业、食品、产品质量）可以跨月，以主体和问题对象为准。
+8. 证据不足时放入 unresolved_card_ids，不得猜测。
+9. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
+10. 每个 card_id 最多出现在一个分组中。
 输出必须严格使用以下结构，不得省略键：
 {
   "groups": [
@@ -227,7 +228,7 @@ class DedupEngine:
         final_cards: list[list[EventCard]] = []
         review_components: list[list[EventCard]] = []
         for component in components:
-            if _component_rule_safe(component):
+            if _component_rule_safe(component, self.options):
                 final_cards.append(component)
                 audits.extend(_rule_merge_audits(component, self.options))
             elif _should_model_review(component, self.options):
@@ -246,7 +247,14 @@ class DedupEngine:
 
         async def process_component(component: list[EventCard]):
             async with semaphore:
-                return await self._partition_component(component)
+                component_groups, component_audits = await self._partition_component(
+                    component
+                )
+                if self.options.text_duplicate_enabled:
+                    component_groups = _converge_rule_safe_groups(
+                        component_groups, self.options
+                    )
+                return component_groups, component_audits
 
         for start in range(0, len(review_components), self.options.max_concurrency):
             if (
@@ -565,7 +573,7 @@ class DedupEngine:
         # 无模型时也先做候选召回与确定性规则合并（文本近重复、同主体问题族等），
         # 再对规则无法判定的组件使用保守回退，避免“无模型必然过粗”。
         for component in _candidate_components(cards, self.options):
-            if _component_rule_safe(component):
+            if _component_rule_safe(component, self.options):
                 grouped_cards.append(component)
                 audits.extend(_rule_merge_audits(component, self.options))
             else:
@@ -1084,7 +1092,9 @@ def _pair_has_merge_evidence(left: EventCard, right: EventCard) -> bool:
     )
 
 
-def _pair_rule_safe(left: EventCard, right: EventCard) -> bool:
+def _pair_rule_safe(
+    left: EventCard, right: EventCard, options: DedupEngineOptions
+) -> bool:
     if _pair_conflict(left, right):
         return False
     if _intersects(
@@ -1103,6 +1113,15 @@ def _pair_rule_safe(left: EventCard, right: EventCard) -> bool:
         return True
     if _is_consumer_pair(left, right):
         return _text_similarity_from_grams(left.text_grams, right.text_grams) >= 0.8
+    # 同一确定性事件键（同小区/同主体 + 同问题族）且文本高度相似时，
+    # 视为楼栋/门牌等标注差异，直接确定性合并，不依赖模型裁决。
+    if (
+        options.text_duplicate_enabled
+        and left.legacy_keys & right.legacy_keys
+        and _text_similarity_from_grams(left.text_grams, right.text_grams)
+        >= options.text_duplicate_threshold
+    ):
+        return True
     if (
         left.features.get("issue_family")
         and left.features.get("issue_family")
@@ -1123,16 +1142,62 @@ def _pair_rule_safe(left: EventCard, right: EventCard) -> bool:
     )
 
 
-def _component_rule_safe(cards: list[EventCard]) -> bool:
+def _component_rule_safe(
+    cards: list[EventCard], options: DedupEngineOptions
+) -> bool:
     if len(cards) <= 1:
         return True
     if len(cards) > 32:
         return False
     for index, left in enumerate(cards):
         for right in cards[index + 1 :]:
-            if not _pair_rule_safe(left, right):
+            if not _pair_rule_safe(left, right, options):
                 return False
     return True
+
+
+def _pair_convergence_evidence(
+    left: EventCard, right: EventCard, options: DedupEngineOptions
+) -> bool:
+    """同键收敛证据：同一确定性事件键 + 高文本相似 + 无冲突（消费纠纷除外）。
+
+    用于模型裁决后的确定性收敛：同一小区同一问题、仅楼栋/门牌标注不同的
+    工单，不因模型按楼栋拆分而分裂成多个事件。
+    """
+    if not options.text_duplicate_enabled:
+        return False
+    if _pair_conflict(left, right):
+        return False
+    if _is_consumer_pair(left, right):
+        return False
+    if not left.legacy_keys & right.legacy_keys:
+        return False
+    return (
+        _text_similarity_from_grams(left.text_grams, right.text_grams)
+        >= options.text_duplicate_threshold
+    )
+
+
+def _converge_rule_safe_groups(
+    groups: list[list[EventCard]], options: DedupEngineOptions
+) -> list[list[EventCard]]:
+    if len(groups) <= 1:
+        return groups
+    finder = _UnionFind(len(groups))
+    for left_index in range(len(groups)):
+        for right_index in range(left_index + 1, len(groups)):
+            if finder.find(left_index) == finder.find(right_index):
+                continue
+            if any(
+                _pair_convergence_evidence(left_card, right_card, options)
+                for left_card in groups[left_index]
+                for right_card in groups[right_index]
+            ):
+                finder.union(left_index, right_index)
+    return [
+        [card for index in indexes for card in groups[index]]
+        for indexes in finder.grouped()
+    ]
 
 
 def _should_model_review(

@@ -6,7 +6,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
-from complaint_dedup.dedup_engine import PROMPT_VERSION, _features_conflict
+from complaint_dedup.dedup_engine import (
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    _features_conflict,
+)
 
 from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.corpus_models import InputRecord
@@ -74,6 +78,34 @@ class AllCardsLlmClient:
                         )
                     ],
                 )
+            ]
+        )
+
+
+class SingleCardGroupsLlmClient:
+    """模拟按楼栋拆分的模型：每张卡各自成组。"""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, str]]] = []
+
+    async def chat_json(self, messages, response_model):
+        self.calls.append(messages)
+        raw = messages[1]["content"].split("\n", 1)[1]
+        cards = json.loads(raw)
+        return EventCardBatchResponse(
+            groups=[
+                EventCardGroup(
+                    card_ids=[str(card["card_id"])],
+                    confidence=0.95,
+                    supporting_evidence=[
+                        EvidenceItem(
+                            field="issue",
+                            cards=[str(card["card_id"])],
+                            reason="单卡占位",
+                        )
+                    ],
+                )
+                for card in cards
             ]
         )
 
@@ -171,7 +203,7 @@ async def test_hbd_derived_orders_are_hard_merged(database):
             )
         ).mappings().one()
     assert audit_count >= 1
-    assert run["algorithm_version"] == "event-key-v3"
+    assert run["algorithm_version"] == "event-key-v4"
     assert run["feature_version"] == FEATURE_VERSION
     assert run["prompt_version"] == PROMPT_VERSION
 
@@ -249,6 +281,153 @@ async def test_event_card_model_can_merge_cross_legacy_key_candidates(database):
     assert len(events[0]["members"]) == 2
     assert comparison.llm_coverage == 1
     assert comparison.decision_count >= 1
+    assert llm.calls
+
+
+def test_system_prompt_exempts_property_issues_from_building_split():
+    assert "仅对小区类持续事项" in SYSTEM_PROMPT
+    assert "不得援引本条合并" in SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_same_community_property_issue_merges_across_buildings(database):
+    """同一小区同一物业问题：楼栋标注差异不应拆成两个事件（回归：明泰城 133/146）。"""
+    llm = FakeLlmClient(evidence_field="issue")
+    service = FullCorpusService(database, llm_client=llm)
+    appeal_without_building = (
+        "地址：江海区江南街道金瓯路明泰城状元居。事项：小区高层物业费 2.4 元/㎡/月，"
+        "物业顶格收费却服务缺位、质价严重不符，要求整改并书面答复。"
+    )
+    await service.sync_records(
+        [
+            make_record(
+                "PROP-A",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal=appeal_without_building,
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居",
+            ),
+            make_record(
+                "PROP-B",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal="地址：江海区江南街道金瓯路明泰城状元居26幢。事项：小区高层物业费 2.4 元/㎡/月，"
+                "物业顶格收费却服务缺位、质价严重不符，要求整改并书面答复。",
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居26幢",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_key_high_similarity_property_pair_merges_without_model(database):
+    """同一小区同一问题文本、仅楼栋标注不同：确定性规则直接合并，不依赖模型。"""
+    llm = FakeLlmClient(fail=True)
+    service = FullCorpusService(database, llm_client=llm)
+    shared = (
+        "地址：江海区江南街道金瓯路明泰城状元居{building}。事项：小区高层物业费 2.4 元/㎡/月，"
+        "物业顶格收费却服务缺位、质价严重不符，要求整改并书面答复。"
+    )
+    await service.sync_records(
+        [
+            make_record(
+                "BUILD-A",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal=shared.format(building=""),
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居",
+            ),
+            make_record(
+                "BUILD-B",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal=shared.format(building="26幢"),
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居26幢",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 1
+    assert len(events[0]["members"]) == 2
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_model_building_split_is_converged_for_same_property_issue(database):
+    """模型按楼栋拆分后，同小区同问题分组确定性收敛（回归：明泰城 133/146）。"""
+    llm = SingleCardGroupsLlmClient()
+    service = FullCorpusService(database, llm_client=llm)
+    shared = (
+        "地址：江海区江南街道金瓯路明泰城状元居{building}。事项：小区高层物业费 2.4 元/㎡/月，"
+        "物业顶格收费却服务缺位、质价严重不符，要求整改并书面答复。"
+    )
+    await service.sync_records(
+        [
+            make_record(
+                "CONV-A",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal=shared.format(building=""),
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居",
+            ),
+            make_record(
+                "CONV-B",
+                title="江海区江南街道金瓯路明泰城状元居物业质价严重不符的问题",
+                appeal=shared.format(building="26幢"),
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居26幢",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+            make_record(
+                "CONV-C",
+                title="江海区江南街道金瓯路明泰城状元居物业管家在岗时长不达标的问题",
+                appeal="地址：江海区江南街道金瓯路明泰城状元居26幢。事项：物业管家长期不在岗、失联，要求更换管家并公示考核记录。",
+                category="（江海）物业服务纠纷",
+                location="江海区江南街道金瓯路明泰城状元居26幢",
+                received="2026-09-03 08:00:00",
+                completed="2026-09-03 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 3),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert sorted(len(event["members"]) for event in events) == [1, 2]
+    merged = next(event for event in events if len(event["members"]) == 2)
+    merged_ids = {
+        member["snapshot"].get("work_order_id") for member in merged["members"]
+    }
+    assert merged_ids == {"CONV-A", "CONV-B"}
     assert llm.calls
 
 
