@@ -548,6 +548,10 @@ def _metric_analysis(pair: dict[str, Any], events: dict[str, Any]) -> str:
         "标注外的灰区样本已进入复核队列（review_queue），需人工/AI 复核后再纳入精确率统计；"
         "最大事件规模仍受 HBD 派生与联名投诉影响，需结合成员内容抽检。"
     )
+    parts.append(
+        "LLM 配置存在运行间波动（同配置多轮运行 Pair 精确率约 0.94-0.96），"
+        "横向对比建议使用多轮运行趋势而非单次结果。"
+    )
     return "；".join(parts)
 
 
