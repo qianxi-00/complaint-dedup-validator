@@ -55,7 +55,7 @@ complaint-dedup-validator/
 
 ```powershell
 uv sync
-Copy-Item .env.example .env   # 填写 DB_* 与百炼 LLM_API_KEY
+Copy-Item .env.example .env   # 填写 DB_* 与本地模型服务连接信息（LLM_API_KEY 默认 EMPTY）
 uv run uvicorn complaint_dedup.main:app --host 127.0.0.1 --port 8765
 # 另开一个终端启动后台 worker（PostgreSQL 模式下 API 不内嵌 worker）
 uv run python -m complaint_dedup.full_corpus_worker
@@ -164,7 +164,7 @@ uv run python scripts/review_eval_queue.py --refine runtime/eval/review_results.
 ```bash
 mkdir -p config
 cp deploy/env.intranet.example config/.env
-# 修改 config/.env 中的 LLM_BASE_URL、LLM_API_KEY、LLM_MODEL
+# 修改 config/.env 中的 LLM_BASE_URL、LLM_MODEL（本地服务不校验密钥时 LLM_API_KEY 保持 EMPTY）
 docker compose --project-directory . -f deploy/compose.intranet.yaml up -d
 ```
 

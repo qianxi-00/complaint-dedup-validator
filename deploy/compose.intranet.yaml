@@ -38,6 +38,8 @@ services:
       DB_PASSWORD: complaint_dedup_internal_2026
       DB_NAME: complaint_dedup
       PYTHONPATH: /app/src
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - runtime_data:/app/runtime
     ports:
@@ -65,6 +67,8 @@ services:
       DB_PASSWORD: complaint_dedup_internal_2026
       DB_NAME: complaint_dedup
       PYTHONPATH: /app/src
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - runtime_data:/app/runtime
     read_only: true
