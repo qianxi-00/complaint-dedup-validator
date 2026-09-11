@@ -29,7 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from complaint_dedup.config import Settings  # noqa: E402
 from complaint_dedup.corpus_models import InputRecord  # noqa: E402
-from complaint_dedup.dedup_engine import DedupEngine, DedupEngineOptions  # noqa: E402
+from complaint_dedup.dedup_engine import (  # noqa: E402
+    PROMPT_VERSION,
+    DedupEngine,
+    DedupEngineOptions,
+)
 from complaint_dedup.dedup_features import FEATURE_VERSION  # noqa: E402
 from complaint_dedup.full_corpus import _normalize_record  # noqa: E402
 from complaint_dedup.llm_client import build_llm_client  # noqa: E402
@@ -232,6 +236,14 @@ def bcubed_metrics(
 def event_metrics(result: Any, rows: list[dict[str, Any]]) -> dict[str, Any]:
     sizes = [len(group) for group in result.groups]
     total = sum(sizes)
+    largest = max(result.groups, key=len) if result.groups else []
+    distinct_fingerprints = len(
+        {
+            (row.get("feature_json") or {}).get("complaint_fingerprint")
+            for row in largest
+            if (row.get("feature_json") or {}).get("complaint_fingerprint")
+        }
+    )
     return {
         "records": total,
         "events": len(sizes),
@@ -240,6 +252,7 @@ def event_metrics(result: Any, rows: list[dict[str, Any]]) -> dict[str, Any]:
         if sizes
         else 0.0,
         "max_event_size": max(sizes) if sizes else 0,
+        "max_event_distinct_fingerprints": distinct_fingerprints,
         "size_ge_10": sum(1 for size in sizes if size >= 10),
         "size_ge_50": sum(1 for size in sizes if size >= 50),
         "llm_coverage": round(result.llm_coverage, 4),
@@ -285,7 +298,7 @@ def collect_versions(settings: Settings, db_path: str | None) -> dict[str, Any]:
         },
         "algorithm": {
             "feature_version": FEATURE_VERSION,
-            "prompt_version": "event-card-v2",
+            "prompt_version": PROMPT_VERSION,
         },
         "python": sys.version.split()[0],
         "platform": platform.platform(),
@@ -423,7 +436,8 @@ def build_report(
         f"| BCubed P/R/F1 | {bcubed['precision']} / {bcubed['recall']} / {bcubed['f1']}"
         f"（样本 {bcubed['items']}） |",
         f"| 事件数/单例率 | {events['events']} / {events['singleton_rate']} |",
-        f"| 最大事件规模 | {events['max_event_size']} |",
+        f"| 最大事件规模 | {events['max_event_size']}"
+        f"（去重内容指纹 {events.get('max_event_distinct_fingerprints', 0)}） |",
         f"| LLM 覆盖率 | {events['llm_coverage']} |",
         f"| 回退数/决策数 | {events['fallback_count']} / {events['decision_count']} |",
         f"| 模型请求/失败 | {events['request_count']} / {events['llm_error_count']} |",

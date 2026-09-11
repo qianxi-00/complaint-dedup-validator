@@ -119,3 +119,46 @@ class ExtractionBatchResponse(BaseModel):
     @classmethod
     def _coerce_records(cls, value: Any) -> list[Any]:
         return _list_or_empty(value)
+
+
+class PairReviewDecision(BaseModel):
+    """评估集复核结果：对一对工单给出 same/different/uncertain。"""
+
+    pair_id: str
+    label: Literal["same", "different", "uncertain"] = "uncertain"
+    confidence: float = Field(default=0, ge=0, le=1)
+    reason_code: str = ""
+    reason: str = ""
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _normalize_label(cls, value: Any) -> Any:
+        text = str(value or "uncertain").strip().lower()
+        mapping = {
+            "same": "same",
+            "same_event": "same",
+            "merge": "same",
+            "同一事件": "same",
+            "different": "different",
+            "different_event": "different",
+            "split": "different",
+            "不同事件": "different",
+            "uncertain": "uncertain",
+            "unknown": "uncertain",
+            "不确定": "uncertain",
+        }
+        return mapping.get(text, "uncertain")
+
+    @field_validator("reason_code", "reason", mode="before")
+    @classmethod
+    def _coerce_text(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
+
+class PairReviewBatchResponse(BaseModel):
+    decisions: list[PairReviewDecision] = Field(default_factory=list)
+
+    @field_validator("decisions", mode="before")
+    @classmethod
+    def _coerce_decisions(cls, value: Any) -> list[Any]:
+        return _list_or_empty(value)

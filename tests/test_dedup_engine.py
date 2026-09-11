@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
-from complaint_dedup.dedup_engine import _features_conflict
+from complaint_dedup.dedup_engine import PROMPT_VERSION, _features_conflict
 
 from complaint_dedup.async_database import AsyncDatabase
 from complaint_dedup.corpus_models import InputRecord
@@ -173,7 +173,7 @@ async def test_hbd_derived_orders_are_hard_merged(database):
     assert audit_count >= 1
     assert run["algorithm_version"] == "event-key-v3"
     assert run["feature_version"] == FEATURE_VERSION
-    assert run["prompt_version"] == "event-card-v2"
+    assert run["prompt_version"] == PROMPT_VERSION
 
 
 @pytest.mark.asyncio
@@ -776,6 +776,42 @@ async def test_same_subject_outside_enterprise_families_is_not_force_merged(data
                 appeal="地址：江海区礼乐街道五邑路200号江门市裕立汽车销售服务有限公司。事项：退款纠纷。",
                 category="消费纠纷",
                 location="江海区礼乐街道五邑路200号江门市裕立汽车销售服务有限公司",
+                received="2026-09-02 08:00:00",
+                completed="2026-09-02 10:00:00",
+            ),
+        ],
+        file_name="all.xlsx",
+    )
+
+    comparison = await service.compare(
+        time_field="completed_at",
+        target_from=date(2026, 9, 1),
+        target_to=date(2026, 9, 2),
+    )
+
+    events = await service.list_comparison_events(comparison.comparison_id)
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_company_consumer_disputes_stay_separate(database):
+    service = FullCorpusService(database)
+    location = "江海区外海街道金瓯路188号广东大冶摩托车技术有限公司"
+    await service.sync_records(
+        [
+            make_record(
+                "MOTO-A",
+                title="江海区外海街道金瓯路188号广东大冶摩托车技术有限公司消费纠纷",
+                appeal="地址：江海区外海街道金瓯路188号广东大冶摩托车技术有限公司。事项：购买型号A摩托车发动机异响，要求退换。",
+                category="交通工具类",
+                location=location,
+            ),
+            make_record(
+                "MOTO-B",
+                title="江海区外海街道金瓯路188号广东大冶摩托车技术有限公司售后纠纷",
+                appeal="地址：江海区外海街道金瓯路188号广东大冶摩托车技术有限公司。事项：型号B车辆排气管故障，售后迟迟不提供配件。",
+                category="交通工具类",
+                location=location,
                 received="2026-09-02 08:00:00",
                 completed="2026-09-02 10:00:00",
             ),

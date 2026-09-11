@@ -146,6 +146,16 @@ uv run python scripts/eval_dedup.py --dataset tests/fixtures/dedup_eval --compar
 
 评估集由 `scripts/build_eval_set.py` 从本地全量库分层抽样生成，冻结在 `tests/fixtures/dedup_eval/`（文本已掩码姓名/手机号/身份证，保留工单编号）；基线报告见 `docs/判重评估报告-基线-v3.0.md`。`tests/test_dedup_eval.py` 在缺少冻结集时自动跳过。
 
+复核不确定样本并写回冻结集：
+
+```powershell
+uv run python scripts/review_eval_queue.py --apply
+# 仅规则复核（不调用模型）/ 使用已有复核结果 / 业务护栏修订
+uv run python scripts/review_eval_queue.py --no-llm
+uv run python scripts/review_eval_queue.py --apply --from-results runtime/eval/review_results_final.jsonl
+uv run python scripts/review_eval_queue.py --refine runtime/eval/review_results.jsonl --results runtime/eval/review_results_refined.jsonl
+```
+
 ## Docker 部署
 
 内网部署使用 `deploy/compose.intranet.yaml`，包含 PostgreSQL、API 和独立 worker，默认端口 `28765`。数据库表会在 API 启动时自动创建并校验，实施人员只需配置模型连接：

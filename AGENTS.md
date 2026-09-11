@@ -64,6 +64,7 @@ Use `pytest` with explicit `@pytest.mark.asyncio` for async tests and per-file `
 ## Dedup Evaluation
 
 - Rebuild the frozen set from a local database: `uv run python scripts/build_eval_set.py --db runtime/<db>.db --source-xlsx "<原始全量文件>.xlsx"`.
+- Review the uncertain queue and write accepted labels back: `uv run python scripts/review_eval_queue.py --apply` (rule + model review; supports `--no-llm`, `--from-results`, `--refine`).
 - Deterministic (no model) metrics: `uv run python scripts/eval_dedup.py --dataset tests/fixtures/dedup_eval --no-llm`; add `--compare <previous.json>` for before/after tables.
 - Baseline report: `docs/判重评估报告-基线-v3.0.md`. Any dedup behavior change must rerun the evaluation and add a matching regression test; thresholds are enforced by `tests/test_dedup_eval.py`.
 - Never fabricate code versions, model parameters, vLLM details, or case IDs. Unverifiable facts must be recorded as `不可核验`; case IDs must come from the frozen dataset or the database.

@@ -48,7 +48,7 @@ def test_settings_load_active_defaults() -> None:
     assert settings.dedup_text_duplicate_enabled is True
     assert settings.dedup_text_duplicate_threshold == 0.9
     assert settings.dedup_fallback_max_span_days == 90
-    assert settings.dedup_fallback_span_shadow is True
+    assert settings.dedup_fallback_span_shadow is False
 
 
 @pytest.mark.parametrize(

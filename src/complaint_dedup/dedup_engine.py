@@ -26,17 +26,18 @@ from complaint_dedup.dedup_features import (
 from complaint_dedup.llm_models import EventCardBatchResponse
 
 ALGORITHM_VERSION = "event-key-v3"
-PROMPT_VERSION = "event-card-v2"
+PROMPT_VERSION = "event-card-v3"
 SYSTEM_PROMPT = """你是投诉工单判重专家。你只判断输入事件卡是否属于同一具体投诉事件或同一处置链。
 必须遵守：
 1. 仅因地区、街道、事项大类或电话相同，不得判为同一事件。
 2. 同一主体、同一具体问题对象且没有硬冲突时，可以判为同一事件。
 3. 明确不同的订单、门牌、楼栋、房间、商品、被投诉对象或核心事实，必须拆分。
 4. 同一企业、同一问题族（如欠薪、食品安全、产品质量）的投诉，即使由不同人、不同月份提出，也视为同一事件。
-5. 瞬时事项（噪音、占道、交通、单一故障）时间接近是重要的合并证据；持续事项（欠薪、物业、食品、产品质量）可以跨月，以主体和问题对象为准。
-6. 证据不足时放入 unresolved_card_ids，不得猜测。
-7. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
-8. 每个 card_id 最多出现在一个分组中。
+5. 消费纠纷（商品、家用电器、交通工具等）默认属于不同事件，除非订单号一致，或同一商品对象且同一具体问题。
+6. 瞬时事项（噪音、占道、交通、单一故障）时间接近是重要的合并证据；持续事项（欠薪、物业、食品、产品质量）可以跨月，以主体和问题对象为准。
+7. 证据不足时放入 unresolved_card_ids，不得猜测。
+8. 只能输出指定 JSON，不得输出 Markdown、解释前后缀或输入中不存在的字段。
+9. 每个 card_id 最多出现在一个分组中。
 输出必须严格使用以下结构，不得省略键：
 {
   "groups": [
@@ -505,7 +506,17 @@ class DedupEngine:
             for index, group in enumerate(groups):
                 if not card.legacy_keys & group_keys[index]:
                     continue
-                if all(not _pair_conflict(card, member) for member in group):
+                if all(
+                    not _pair_conflict(card, member)
+                    and (
+                        not _is_consumer_pair(card, member)
+                        or _text_similarity_from_grams(
+                            card.text_grams, member.text_grams
+                        )
+                        >= 0.8
+                    )
+                    for member in group
+                ):
                     if self._time_span_guard_blocks(card, group):
                         continue
                     target_index = index
@@ -851,7 +862,13 @@ def _make_event_card(card_id: str, records: list[PreparedRecord]) -> EventCard:
             "complaint_fingerprint": _first_nonempty(
                 item.complaint_fingerprint for item in features
             ),
+            "problem_family": _first_nonempty(
+                item.problem_family for item in features
+            ),
             "subjects": _merged_values(item.subjects for item in features),
+            "strong_subjects": _merged_values(
+                item.strong_subjects for item in features
+            ),
             "locations": _merged_values(item.locations for item in features),
             "location_keys": _merged_values(
                 item.explicit_address for item in features if item.explicit_address
@@ -1084,6 +1101,8 @@ def _pair_rule_safe(left: EventCard, right: EventCard) -> bool:
         left.features.get("occurrence_ids"), right.features.get("occurrence_ids")
     ):
         return True
+    if _is_consumer_pair(left, right):
+        return _text_similarity_from_grams(left.text_grams, right.text_grams) >= 0.8
     if (
         left.features.get("issue_family")
         and left.features.get("issue_family")
@@ -1133,6 +1152,18 @@ def _pair_conflict(left: EventCard, right: EventCard) -> bool:
 _UNKNOWN_VALUES = frozenset(
     {"", "未知地点", "未知街道", "未知", "不详", "无", "其他", "其它", "-", "--"}
 )
+# 消费维权类不能仅凭“同主体+同问题族”合并：不同消费者/订单视为不同事件
+CONSUMER_FAMILIES = frozenset({"消费维权"})
+
+
+def _is_consumer_pair(left: EventCard, right: EventCard) -> bool:
+    left_family = left.features.get("problem_family")
+    right_family = right.features.get("problem_family")
+    return (
+        left_family in CONSUMER_FAMILIES
+        and right_family in CONSUMER_FAMILIES
+        and left_family == right_family
+    )
 
 
 def _known_value(value: Any) -> str:

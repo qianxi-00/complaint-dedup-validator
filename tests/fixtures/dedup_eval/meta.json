@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-10T10:07:15.545557+00:00",
+  "generated_at": "2026-09-11T01:41:03.363578+00:00",
   "seed": 20260910,
   "database": {
     "path": "runtime\\local-test-20260910.db",
@@ -34,19 +34,19 @@
     "large_event": 65
   },
   "pair_count": 914,
-  "labeled_pair_count": 573,
-  "review_queue_count": 341,
+  "labeled_pair_count": 896,
+  "review_queue_count": 344,
   "label_counts": {
-    "same": 339,
-    "uncertain": 341,
-    "different": 234
+    "same": 521,
+    "different": 375,
+    "uncertain": 18
   },
   "split_counts": {
-    "train": 362,
-    "dev": 179,
-    "test": 373
+    "test": 365,
+    "train": 359,
+    "dev": 172
   },
-  "cluster_count": 141,
+  "cluster_count": 200,
   "consistency_check": {
     "status": "ok",
     "checked": 30,
@@ -56,5 +56,15 @@
     "mismatches": [],
     "method": "按值比较（掩码后先精确、再折叠空白）；仅空白差异单独计数"
   },
-  "label_method": "rule_auto + AI 初标；困难集进入 review_queue 待人工复核"
+  "label_method": "rule_auto + AI 初标；困难集进入 review_queue 待人工复核",
+  "review": {
+    "reviewed_at": "2026-09-11T01:41:04.839125+00:00",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "method": "rule_review + ai_reviewed（min_confidence=0.8）",
+    "accepted_same": 183,
+    "accepted_different": 143,
+    "remaining_uncertain": 18,
+    "llm_failed": 0,
+    "added_pairs": 326
+  }
 }

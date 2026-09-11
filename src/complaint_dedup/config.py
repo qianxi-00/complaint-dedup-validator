@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     dedup_text_duplicate_enabled: bool = True  # 高相似文本确定性合并开关
     dedup_text_duplicate_threshold: float = Field(default=0.9, ge=0, le=1)  # 文本重复判定阈值
     dedup_fallback_max_span_days: int = Field(default=90, ge=0)  # 回退合并时间跨度护栏（天）；0=关闭
-    dedup_fallback_span_shadow: bool = True  # 时间跨度护栏影子模式：只统计不生效
+    dedup_fallback_span_shadow: bool = False  # 时间跨度护栏影子模式；已按评估结论默认生效
 
     @model_validator(mode="after")
     def validate_runtime_capacity(self) -> "Settings":
