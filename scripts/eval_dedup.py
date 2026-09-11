@@ -280,7 +280,10 @@ def _run_git(*args: str) -> str:
 
 
 def _git_dirty_tracked() -> bool:
-    output = _run_git("status", "--porcelain", "--untracked-files=no")
+    # core.quotepath=false 保证中文路径按字面输出，便于过滤生成的报告文件
+    output = _run_git(
+        "-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no"
+    )
     lines = [
         line
         for line in output.splitlines()
