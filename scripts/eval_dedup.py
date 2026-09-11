@@ -397,6 +397,7 @@ def build_report(
     metrics: dict[str, Any],
     engine_params: dict[str, Any],
     comparison: dict[str, Any] | None,
+    note: str = "",
 ) -> str:
     pair = metrics["pair"]
     bcubed = metrics["bcubed"]
@@ -410,6 +411,10 @@ def build_report(
         f"- 数据集：`{dataset_dir}`；工单 {meta.get('record_count')} 条，"
         f"标注对 {meta.get('labeled_pair_count')}，复核队列 {meta.get('review_queue_count')}",
         f"- 数据库：{json.dumps(meta.get('database'), ensure_ascii=False)}",
+    ]
+    if note:
+        lines.append(f"- 运行说明：{note}")
+    lines += [
         "",
         "## 2. 模型信息",
         f"- 当前模型：`{versions['config']['llm_model']}`",
@@ -452,11 +457,16 @@ def build_report(
         f"（样本 {bcubed['items']}） |",
         f"| 事件数/单例率 | {events['events']} / {events['singleton_rate']} |",
         f"| 最大事件规模 | {events['max_event_size']}"
-        f"（去重内容指纹 {events.get('max_event_distinct_fingerprints', 0)}） |",
+        + (
+            f"（去重内容指纹 {events['max_event_distinct_fingerprints']}）"
+            if "max_event_distinct_fingerprints" in events
+            else ""
+        )
+        + " |",
         f"| LLM 覆盖率 | {events['llm_coverage']} |",
         f"| 回退数/决策数 | {events['fallback_count']} / {events['decision_count']} |",
         f"| 模型请求/失败 | {events['request_count']} / {events['llm_error_count']} |",
-        f"| 时间护栏命中（shadow） | {events['span_guard_count']} |",
+        f"| {span_guard_label(versions)} | {events['span_guard_count']} |",
         "",
         "### 指标原因分析",
         _metric_analysis(pair, events),
@@ -516,6 +526,11 @@ def build_report(
         "",
     ]
     return "\n".join(lines) + "\n"
+
+
+def span_guard_label(versions: dict[str, Any]) -> str:
+    shadow = versions.get("config", {}).get("dedup_fallback_span_shadow", True)
+    return "时间护栏命中（shadow）" if shadow else "时间护栏命中（生效）"
 
 
 def _metric_analysis(pair: dict[str, Any], events: dict[str, Any]) -> str:
@@ -597,6 +612,8 @@ def main() -> None:
     parser.add_argument("--report", default="", help="Markdown 报告输出路径")
     parser.add_argument("--json-out", default="", help="指标 JSON 输出路径")
     parser.add_argument("--compare", default="", help="上一次评估的 JSON 指标")
+    parser.add_argument("--from-json", default="", help="从已保存的评估 JSON 重新生成报告（不调用模型）")
+    parser.add_argument("--note", default="", help="追加到报告的手工运行说明")
     parser.add_argument("--no-llm", action="store_true", help="只用规则，不调用模型")
     parser.add_argument("--model", default="", help="覆盖模型名称")
     parser.add_argument("--concurrency", type=int, default=0, help="模型并发")
@@ -611,25 +628,37 @@ def main() -> None:
         meta_path = dataset_dir.parent / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
 
-    rows = build_rows(records)
-    result, settings, engine_params = run_engine(
-        rows,
-        use_llm=not args.no_llm,
-        model_override=args.model or None,
-        concurrency=args.concurrency or None,
-    )
-    predicted = {
-        str(row["record_key"]): index
-        for index, group in enumerate(result.groups)
-        for row in group
-    }
-    titles = {record["record_key"]: record["title"] for record in records}
-    metrics = {
-        "pair": pair_metrics(pairs, predicted, titles),
-        "bcubed": bcubed_metrics(clusters, predicted),
-        "event": event_metrics(result, rows),
-    }
-    versions = collect_versions(settings, args.db or meta.get("database", {}).get("path"))
+    if args.from_json:
+        # 从已保存结果重放报告：不重新调用模型，用于账户受限或纯报告重排
+        payload = json.loads(Path(args.from_json).read_text(encoding="utf-8"))
+        metrics = payload["metrics"]
+        versions = payload["versions"]
+        engine_params = payload.get("engine_params", {})
+        settings = Settings()
+        if payload.get("dataset"):
+            dataset_dir = Path(payload["dataset"])
+    else:
+        rows = build_rows(records)
+        result, settings, engine_params = run_engine(
+            rows,
+            use_llm=not args.no_llm,
+            model_override=args.model or None,
+            concurrency=args.concurrency or None,
+        )
+        predicted = {
+            str(row["record_key"]): index
+            for index, group in enumerate(result.groups)
+            for row in group
+        }
+        titles = {record["record_key"]: record["title"] for record in records}
+        metrics = {
+            "pair": pair_metrics(pairs, predicted, titles),
+            "bcubed": bcubed_metrics(clusters, predicted),
+            "event": event_metrics(result, rows),
+        }
+        versions = collect_versions(
+            settings, args.db or meta.get("database", {}).get("path")
+        )
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     commit = (versions["code"]["commit"] or "nocommit")[:8]
     json_out = Path(args.json_out) if args.json_out else Path("runtime/eval") / f"eval_{commit}_{timestamp}.json"
@@ -654,6 +683,7 @@ def main() -> None:
         metrics=metrics,
         engine_params=engine_params,
         comparison=comparison,
+        note=args.note,
     )
     report_path = Path(args.report) if args.report else Path("runtime/eval") / f"report_{commit}_{timestamp}.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
