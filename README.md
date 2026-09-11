@@ -168,6 +168,13 @@ cp deploy/env.intranet.example config/.env
 docker compose --project-directory . -f deploy/compose.intranet.yaml up -d
 ```
 
+测试环境可直接用 `Dockerfile.test` 构建镜像（不启用 PyArmor 与授权烧录）：
+
+```bash
+docker build -f Dockerfile.test -t complaint-dedup-validator-intranet:latest .
+docker compose --project-directory . -f deploy/compose.intranet.yaml up -d
+```
+
 正常 Docker 启动会自动创建并校验当前表，并拒绝旧表或字段不完整的数据库。只有明确需要破坏性清空旧库时，才执行：
 
 ```powershell
