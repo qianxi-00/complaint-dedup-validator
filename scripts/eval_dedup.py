@@ -272,6 +272,8 @@ def _run_git(*args: str) -> str:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
         return completed.stdout.strip() if completed.returncode == 0 else ""
